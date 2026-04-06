@@ -69,6 +69,8 @@ class AgentConfig:
     loop: str = "react"
     max_turns: int = 10
     max_cost: float | None = None
+    tool_timeout: int = 30
+    max_output_chars: int = 10_000
     provider_kwargs: dict[str, Any] = field(default_factory=dict)
     permissions: dict[str, Any] = field(default_factory=dict)
     hooks: dict[str, Any] = field(default_factory=dict)

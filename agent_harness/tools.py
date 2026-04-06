@@ -12,6 +12,8 @@ from typing import Any, get_type_hints
 
 from agent_harness.types import ToolCall, ToolResult
 
+tool_timeout: int = 30
+
 _TYPE_MAP: dict[type[Any], str] = {
     str: "string",
     int: "integer",
@@ -100,7 +102,7 @@ def run_command(command: str, working_dir: str = ".") -> str:
         args,
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=tool_timeout,
         cwd=working_dir,
     )
     output = result.stdout
@@ -140,7 +142,7 @@ def execute_code(code: str, language: str = "python") -> str:
         args,
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=tool_timeout,
     )
     output = result.stdout
     if result.stderr:
@@ -155,11 +157,30 @@ registry: dict[str, Callable[..., str]] = {
 }
 
 
-def execute_tool(tool_call: ToolCall) -> ToolResult:
+_DEFAULT_MAX_OUTPUT = 10_000
+
+
+def _truncate(output: str, max_chars: int) -> str:
+    """Truncate output if it exceeds max_chars.
+
+    Args:
+        output: Raw output string.
+        max_chars: Maximum allowed characters.
+
+    Returns:
+        Original or truncated output with message.
+    """
+    if len(output) <= max_chars:
+        return output
+    return output[:max_chars] + f"\n[truncated — {len(output)} chars total]"
+
+
+def execute_tool(tool_call: ToolCall, max_output_chars: int = _DEFAULT_MAX_OUTPUT) -> ToolResult:
     """Execute a tool call and return the result.
 
     Args:
-        tool_call: The tool invocation to execute
+        tool_call: The tool invocation to execute.
+        max_output_chars: Max output characters before truncation.
 
     Returns:
         ToolResult with output or error.
@@ -169,6 +190,7 @@ def execute_tool(tool_call: ToolCall) -> ToolResult:
         return ToolResult(tool_call_id=tool_call.id, error=f"Unknown tool: {tool_call.name}")
     try:
         output = fn(**tool_call.arguments)
+        output = _truncate(output, max_output_chars)
         return ToolResult(tool_call_id=tool_call.id, output=output)
     except Exception as exc:
         return ToolResult(tool_call_id=tool_call.id, error=str(exc))

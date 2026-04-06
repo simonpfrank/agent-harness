@@ -68,6 +68,8 @@ def load(agent_dir: str) -> AgentConfig:
         loop=raw.get("loop", "react"),
         max_turns=raw.get("max_turns", 10),
         max_cost=raw.get("max_cost"),
+        tool_timeout=raw.get("tool_timeout", 30),
+        max_output_chars=raw.get("max_output_chars", 10_000),
         provider_kwargs=raw.get("provider_kwargs", {}),
         permissions=raw.get("permissions", {}),
         hooks=raw.get("hooks", {}),

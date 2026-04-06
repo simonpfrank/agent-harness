@@ -6,6 +6,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
+from agent_harness.context import get_context_limit, trim_messages
 from agent_harness.tools import execute_tool
 from agent_harness.types import AgentConfig, LoopCallbacks, Message, Response
 
@@ -32,8 +33,13 @@ def run(
         Final assistant message content.
     """
     cb = callbacks or LoopCallbacks()
+    context_limit = get_context_limit(config.provider, config.model)
     turn = 0
     while turn < config.max_turns:
+        trimmed = trim_messages(messages, context_limit)
+        if len(trimmed) < len(messages):
+            messages.clear()
+            messages.extend(trimmed)
         logger.debug("Turn %d: calling %s/%s", turn + 1, config.provider, config.model)
         response = chat_fn(messages, tool_schemas, model=config.model, **config.provider_kwargs)
         messages.append(response.message)

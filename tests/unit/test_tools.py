@@ -116,3 +116,24 @@ class TestExecuteCode:
     def test_stderr_captured(self) -> None:
         output = execute_code("import sys; print('err', file=sys.stderr)")
         assert "err" in output
+
+
+class TestExecuteToolTruncation:
+    def test_output_truncated(self) -> None:
+        tc = ToolCall(id="tc_1", name="execute_code", arguments={"code": "print('x' * 200)"})
+        result = execute_tool(tc, max_output_chars=50)
+        assert result.output is not None
+        assert len(result.output) <= 80  # 50 + truncation message
+        assert "[truncated" in result.output
+
+    def test_output_not_truncated_when_under_limit(self) -> None:
+        tc = ToolCall(id="tc_1", name="execute_code", arguments={"code": "print('hi')"})
+        result = execute_tool(tc, max_output_chars=10000)
+        assert result.output is not None
+        assert "[truncated" not in result.output
+
+    def test_default_no_truncation_for_small_output(self) -> None:
+        tc = ToolCall(id="tc_1", name="execute_code", arguments={"code": "print('hi')"})
+        result = execute_tool(tc)
+        assert result.output is not None
+        assert "[truncated" not in result.output

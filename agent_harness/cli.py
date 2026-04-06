@@ -116,7 +116,9 @@ def _domain_prompt(domain: str) -> bool:
     return choice in ("y", "yes")
 
 
-def _make_callbacks(budget: Budget, hooks: Hooks, permissions: Permissions) -> LoopCallbacks:
+def _make_callbacks(
+    budget: Budget, hooks: Hooks, permissions: Permissions, max_output_chars: int = 10_000,
+) -> LoopCallbacks:
     """Create display callbacks with hooks and permissions.
 
     Args:
@@ -141,7 +143,7 @@ def _make_callbacks(budget: Budget, hooks: Hooks, permissions: Permissions) -> L
             result = ToolResult(tool_call_id=tool_call.id, error="Denied by user")
             show_tool_result(result)
             return result
-        result = execute_tool(checked)
+        result = execute_tool(checked, max_output_chars=max_output_chars)
         result = hooks.run_after_tool(checked, result)
         show_tool_result(result)
         return result
@@ -180,8 +182,10 @@ def run_agent(agent_dir: str, prompt: str | None = None, verbose: bool = False) 
     budget = Budget(config)
     hooks = Hooks(config.hooks, domain_prompt_fn=_domain_prompt, agent_dir=config.agent_dir)
     permissions = Permissions(config.permissions, prompt_fn=_permission_prompt)
+    from agent_harness import tools as tools_module
+    tools_module.tool_timeout = config.tool_timeout
     tool_schemas = [generate_schema(tool_registry[t]) for t in config.tools]
-    callbacks = _make_callbacks(budget, hooks, permissions)
+    callbacks = _make_callbacks(budget, hooks, permissions, config.max_output_chars)
     system_prompt = _build_system_prompt(config)
     messages: list[Message] = [Message(role="system", content=system_prompt)]
 
