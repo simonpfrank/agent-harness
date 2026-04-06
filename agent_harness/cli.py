@@ -101,6 +101,21 @@ def _permission_prompt(tool_call: ToolCall) -> bool:
     return choice in ("a", "s")
 
 
+def _domain_prompt(domain: str) -> bool:
+    """Ask the user whether to allow network access to a domain.
+
+    Args:
+        domain: The domain requesting access.
+
+    Returns:
+        True if the user approves.
+    """
+    choice = _console.input(
+        f"[bold yellow]Allow network access to [cyan]{domain}[/cyan]?[/bold yellow] [y/n] "
+    ).strip().lower()
+    return choice in ("y", "yes")
+
+
 def _make_callbacks(budget: Budget, hooks: Hooks, permissions: Permissions) -> LoopCallbacks:
     """Create display callbacks with hooks and permissions.
 
@@ -163,7 +178,7 @@ def run_agent(agent_dir: str, prompt: str | None = None, verbose: bool = False) 
     chat_fn = provider_registry[config.provider]
     loop_fn = loop_registry[config.loop]
     budget = Budget(config)
-    hooks = Hooks(config.hooks)
+    hooks = Hooks(config.hooks, domain_prompt_fn=_domain_prompt, agent_dir=config.agent_dir)
     permissions = Permissions(config.permissions, prompt_fn=_permission_prompt)
     tool_schemas = [generate_schema(tool_registry[t]) for t in config.tools]
     callbacks = _make_callbacks(budget, hooks, permissions)

