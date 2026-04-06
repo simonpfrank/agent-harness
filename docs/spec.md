@@ -313,20 +313,43 @@ Add to the anthropic provider (and later to others):
 
 **Goal**: Same agent folder works across providers. New loop patterns available.
 
-### 3.1 OpenAI provider (`agent_harness/providers/openai.py`)
+### 3.1 OpenAI provider (`agent_harness/providers/openai_provider.py`)
 
-Same `chat()` interface. Translates to OpenAI's format:
-- Tool schemas: our format maps directly (OpenAI uses `parameters`, we generate that)
-- Messages: map roles, handle tool results as `role="tool"` with `tool_call_id`
+**Already implemented in Phase 1** as `providers/openai_provider.py` using Chat Completions API.
+
+Remaining Phase 3 work:
 - LM Studio support: accept `base_url` from config kwargs, pass to OpenAI client
+- Test with local models (qwen3-4b-thinking-2507 available in LM Studio)
 
 Config for LM Studio:
 ```yaml
 provider: openai
-model: local-model
+model: qwen3-4b-thinking-2507
 provider_kwargs:
   base_url: "http://localhost:1234/v1"
 ```
+
+#### ⚠️ GPT-5 Responses API (future work)
+
+As of 2026, OpenAI is migrating from Chat Completions (`/v1/chat/completions`) to the
+Responses API (`/v1/responses`). Key impacts:
+
+1. **GPT-4o-mini is on the deprecation path** — retired from ChatGPT Feb 2026, API
+   retirement expected later in 2026.
+2. **GPT-5.4+ has dropped tool calling in Chat Completions** with `reasoning: none`.
+   Full tool calling for GPT-5 models requires the Responses API.
+3. **Responses API has a different shape**: typed response objects instead of messages,
+   different function calling format, `instructions` parameter instead of system message.
+4. **Performance**: Responses API gives ~3% better results on benchmarks and 40-80%
+   better cache utilisation for GPT-5 models.
+
+**Action**: When GPT-5 support is needed, add a new `providers/openai_responses.py`
+using the Responses API. The current Chat Completions provider remains correct for
+GPT-4 series models and OpenAI-compatible endpoints (LM Studio, Ollama, etc.).
+
+References:
+- https://developers.openai.com/api/docs/guides/migrate-to-responses
+- https://developers.openai.com/cookbook/examples/gpt-5/gpt-5_new_params_and_tools
 
 ### 3.2 Plan-execute loop (`agent_harness/loops/plan_execute.py`)
 

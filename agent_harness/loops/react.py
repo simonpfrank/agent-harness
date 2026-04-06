@@ -31,7 +31,7 @@ def run(
     cb = callbacks or LoopCallbacks()
     turn = 0
     while turn < config.max_turns:
-        response = chat_fn(messages, tool_schemas, model=config.model)
+        response = chat_fn(messages, tool_schemas, model=config.model, **config.provider_kwargs)
         messages.append(response.message)
 
         if cb.on_response:

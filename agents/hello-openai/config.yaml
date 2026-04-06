@@ -1,0 +1,6 @@
+name: hello-openai
+provider: openai
+model: gpt-4o-mini
+tools: [run_command, read_file, execute_code]
+max_turns: 10
+max_cost: 0.10

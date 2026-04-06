@@ -18,9 +18,14 @@ from agent_harness.types import LoopCallbacks, Message, Usage
 
 load_dotenv()
 
-requires_api_key = pytest.mark.skipif(
+requires_anthropic_key = pytest.mark.skipif(
     not os.environ.get("ANTHROPIC_API_KEY"),
     reason="ANTHROPIC_API_KEY not set",
+)
+
+requires_openai_key = pytest.mark.skipif(
+    not os.environ.get("OPENAI_API_KEY"),
+    reason="OPENAI_API_KEY not set",
 )
 
 
@@ -70,7 +75,7 @@ class TestInvalidConfig:
             validate_config(cfg)
 
 
-@requires_api_key
+@requires_anthropic_key
 class TestRealLLMIntegration:
     def test_single_turn_simple_question(self) -> None:
         """LLM answers a simple question without tool use."""
@@ -131,3 +136,47 @@ class TestRealLLMIntegration:
         summary = budget.summary()
         assert "1" in summary
         assert "$" in summary
+
+
+@requires_openai_key
+class TestOpenAIIntegration:
+    def test_single_turn_simple_question(self) -> None:
+        """OpenAI answers a simple question without tool use."""
+        cfg = load("agents/hello-openai")
+        chat_fn = provider_registry[cfg.provider]
+        schemas = [generate_schema(tool_registry[t]) for t in cfg.tools]
+
+        messages = [
+            Message(role="system", content=cfg.instructions),
+            Message(role="user", content="What is 2 + 2? Reply with just the number."),
+        ]
+        result = run(chat_fn, messages, schemas, cfg)
+        assert "4" in result
+
+    def test_tool_use_list_files(self) -> None:
+        """OpenAI uses run_command to list files."""
+        cfg = load("agents/hello-openai")
+        chat_fn = provider_registry[cfg.provider]
+        schemas = [generate_schema(tool_registry[t]) for t in cfg.tools]
+
+        messages = [
+            Message(role="system", content=cfg.instructions),
+            Message(role="user", content="List the files in the agents/hello-openai directory."),
+        ]
+        cb = LoopCallbacks(on_tool_call=execute_tool)
+        result = run(chat_fn, messages, schemas, cfg, callbacks=cb)
+        assert "config.yaml" in result or "instructions.md" in result
+
+    def test_tool_use_read_file(self) -> None:
+        """OpenAI uses read_file and reports contents."""
+        cfg = load("agents/hello-openai")
+        chat_fn = provider_registry[cfg.provider]
+        schemas = [generate_schema(tool_registry[t]) for t in cfg.tools]
+
+        messages = [
+            Message(role="system", content=cfg.instructions),
+            Message(role="user", content="Read agents/hello-openai/config.yaml and tell me the provider name."),
+        ]
+        cb = LoopCallbacks(on_tool_call=execute_tool)
+        result = run(chat_fn, messages, schemas, cfg, callbacks=cb)
+        assert "openai" in result.lower()
