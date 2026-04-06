@@ -92,7 +92,11 @@ def load_session(path: str) -> list[Message]:
     p = Path(path)
     if not p.exists():
         return []
-    data = json.loads(p.read_text())
+    try:
+        data = json.loads(p.read_text())
+    except json.JSONDecodeError:
+        logger.warning("Corrupted session file: %s — starting fresh", path)
+        return []
     messages = [_dict_to_message(d) for d in data]
     logger.info("Session loaded: %d messages from %s", len(messages), path)
     return messages

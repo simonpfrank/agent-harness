@@ -49,9 +49,10 @@ def load(agent_dir: str) -> AgentConfig:
     if not base.is_dir():
         raise FileNotFoundError(f"Agent directory not found: {agent_dir}")
 
-    raw: dict[str, Any] = yaml.safe_load(
-        _read_required_file(base, "config.yaml", agent_dir)
-    )
+    raw_loaded = yaml.safe_load(_read_required_file(base, "config.yaml", agent_dir))
+    if not isinstance(raw_loaded, dict):
+        raise ValueError(f"config.yaml must contain a YAML mapping, got {type(raw_loaded).__name__}")
+    raw: dict[str, Any] = raw_loaded
     instructions = _read_required_file(base, "instructions.md", agent_dir)
 
     tools_path = base / "tools.md"

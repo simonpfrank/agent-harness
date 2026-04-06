@@ -166,6 +166,34 @@ def _make_callbacks(
     )
 
 
+def _configure_tools(config: AgentConfig) -> None:
+    """Set tool module globals from agent config.
+
+    Args:
+        config: Agent configuration.
+    """
+    from agent_harness import tools as tools_module
+    tools_module.tool_timeout = config.tool_timeout
+    tools_module.active_executor = config.executor
+    tools_module.memory_dir = f"{config.agent_dir}/memory"
+
+
+def _init_messages(config: AgentConfig, session_path: str | None) -> list[Message]:
+    """Load session or create fresh message list.
+
+    Args:
+        config: Agent configuration.
+        session_path: Path to session file, or None.
+
+    Returns:
+        Message list with system prompt.
+    """
+    messages = load_session(session_path) if session_path else []
+    if not messages:
+        messages = [Message(role="system", content=_build_system_prompt(config))]
+    return messages
+
+
 def run_agent(
     agent_dir: str,
     prompt: str | None = None,
@@ -188,23 +216,17 @@ def run_agent(
         sys.exit(1)
 
     setup_logging(agent_dir=config.agent_dir, verbose=verbose)
+    _configure_tools(config)
 
     chat_fn = provider_registry[config.provider]
     loop_fn = loop_registry[config.loop]
     budget = Budget(config)
     hooks = Hooks(config.hooks, domain_prompt_fn=_domain_prompt, agent_dir=config.agent_dir)
     permissions = Permissions(config.permissions, prompt_fn=_permission_prompt)
-    from agent_harness import tools as tools_module
-    tools_module.tool_timeout = config.tool_timeout
-    tools_module.active_executor = config.executor
-    tools_module.memory_dir = f"{config.agent_dir}/memory"
     tool_schemas = [generate_schema(tool_registry[t]) for t in config.tools]
     callbacks = _make_callbacks(budget, hooks, permissions, config.max_output_chars)
-    system_prompt = _build_system_prompt(config)
     session_path = f"{config.agent_dir}/sessions/{session}.json" if session else None
-    messages = load_session(session_path) if session_path else []
-    if not messages:
-        messages = [Message(role="system", content=system_prompt)]
+    messages = _init_messages(config, session_path)
 
     if prompt:
         messages.append(Message(role="user", content=prompt))
