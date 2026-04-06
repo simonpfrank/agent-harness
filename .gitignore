@@ -11,3 +11,7 @@ build/
 .coverage
 htmlcov/
 **/logs/
+**/sessions/
+**/memory/
+**/.allowed_domains.yaml
+**/.permissions.yaml

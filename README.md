@@ -21,6 +21,9 @@ Run an agent:
 
 ```bash
 python -m agent_harness run ./agents/hello "What files are in this directory?"
+
+# Or with pip install:
+agent-harness run ./agents/hello "What files are in this directory?"
 ```
 
 Interactive REPL (no prompt argument):
@@ -125,6 +128,16 @@ permissions:
 
 ## Creating an Agent
 
+Scaffold a new agent:
+
+```bash
+python -m agent_harness init my-agent
+```
+
+This creates `agents/my-agent/` with `config.yaml`, `instructions.md`, and `tools.md` — ready to run immediately. Edit the instructions to change what your agent does.
+
+Or create one manually:
+
 ```bash
 mkdir agents/my-agent
 ```
@@ -143,6 +156,45 @@ max_cost: 0.10
 ```markdown
 You are a helpful assistant. Be concise.
 ```
+
+## Example Agents
+
+| Agent | What it does | Key tools |
+|-------|-------------|-----------|
+| `hello` | General assistant for trying things out | run_command, read_file, execute_code |
+| `csv-analyser` | Answers questions about CSV data deterministically | read_file, execute_code |
+| `code-reviewer` | Reviews git diffs with structured feedback | run_command, read_file |
+| `file-organiser` | Sorts files in a directory by content/type | run_command, read_file, execute_code |
+| `orchestrator` | Routes tasks to specialist agents | run_agent |
+| `hello-local` | Same as hello but uses LM Studio | run_command, read_file, execute_code |
+
+Try them:
+
+```bash
+# Analyse a CSV file
+python -m agent_harness run ./agents/csv-analyser "What's the average value in data.csv?"
+
+# Review recent changes
+python -m agent_harness run ./agents/code-reviewer "Review the last commit"
+
+# Route automatically
+python -m agent_harness run ./agents/orchestrator "Analyse sales.csv"
+```
+
+## Sessions and Memory
+
+Resume a conversation across restarts:
+
+```bash
+python -m agent_harness run ./agents/hello --session research
+# ... conversation happens ...
+# ctrl-c or "exit" to stop
+
+# Resume later:
+python -m agent_harness run ./agents/hello --session research
+```
+
+Agents with `save_memory` and `recall_memory` tools can persist information in `{agent_dir}/memory/`. The LLM decides what to remember — no automatic memory.
 
 ## Providers
 

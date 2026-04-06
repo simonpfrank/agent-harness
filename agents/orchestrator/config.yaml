@@ -1,0 +1,6 @@
+name: orchestrator
+provider: anthropic
+model: claude-haiku-4-5-20251001
+tools: [run_agent]
+max_turns: 5
+max_cost: 0.10
