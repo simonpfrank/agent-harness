@@ -9,7 +9,12 @@ def _tool_call(name: str, **kwargs: str) -> ToolCall:
 
 
 class TestDefaultHooks:
-    def test_no_config_passes_tool_through(self) -> None:
+    def test_default_blocks_dangerous_commands(self) -> None:
+        hooks = Hooks({})
+        tc = _tool_call("run_command", command="rm -rf /")
+        assert hooks.run_before_tool(tc) is None
+
+    def test_default_allows_safe_commands(self) -> None:
         hooks = Hooks({})
         tc = _tool_call("run_command", command="ls")
         assert hooks.run_before_tool(tc) is tc
@@ -19,6 +24,11 @@ class TestDefaultHooks:
         tc = _tool_call("run_command", command="ls")
         result = ToolResult(tool_call_id="tc_1", output="files")
         assert hooks.run_after_tool(tc, result) is result
+
+    def test_opt_out_with_empty_list(self) -> None:
+        hooks = Hooks({"before_tool": []})
+        tc = _tool_call("run_command", command="rm -rf /")
+        assert hooks.run_before_tool(tc) is tc  # no hooks = no blocking
 
 
 class TestDangerousCommandBlocker:

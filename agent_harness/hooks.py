@@ -89,6 +89,8 @@ _BEFORE_REGISTRY: dict[str, BeforeHook] = {
     "path_traversal_detector": path_traversal_detector,
 }
 
+_DEFAULT_BEFORE: list[str] = ["dangerous_command_blocker", "path_traversal_detector"]
+
 _AFTER_REGISTRY: dict[str, AfterHook] = {
     "injection_scanner": injection_scanner,
 }
@@ -102,9 +104,8 @@ class Hooks:
     """
 
     def __init__(self, hook_config: dict[str, Any]) -> None:
-        self._before: list[BeforeHook] = [
-            _BEFORE_REGISTRY[name] for name in hook_config.get("before_tool", [])
-        ]
+        before_names = hook_config["before_tool"] if "before_tool" in hook_config else _DEFAULT_BEFORE
+        self._before: list[BeforeHook] = [_BEFORE_REGISTRY[name] for name in before_names]
         self._after: list[AfterHook] = [
             _AFTER_REGISTRY[name] for name in hook_config.get("after_tool", [])
         ]

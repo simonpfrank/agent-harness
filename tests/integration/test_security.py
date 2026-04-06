@@ -71,12 +71,19 @@ class TestPermissionsIntegration:
 
 
 class TestDefaultConfigUnchanged:
-    def test_no_hooks_passes_everything(self) -> None:
-        """Agent with no hooks config behaves like Phase 1."""
+    def test_default_hooks_block_dangerous_commands(self) -> None:
+        """Agent with no hooks config still has default safety hooks."""
         cfg = load("tests/data/valid_agent")
         hooks = Hooks(cfg.hooks)
         tc = ToolCall(id="tc_1", name="run_command", arguments={"command": "rm -rf /"})
-        assert hooks.run_before_tool(tc) is tc  # no hooks = no blocking
+        assert hooks.run_before_tool(tc) is None  # defaults block dangerous commands
+
+    def test_default_hooks_allow_safe_commands(self) -> None:
+        """Agent with no hooks config allows safe commands."""
+        cfg = load("tests/data/valid_agent")
+        hooks = Hooks(cfg.hooks)
+        tc = ToolCall(id="tc_1", name="run_command", arguments={"command": "ls -la"})
+        assert hooks.run_before_tool(tc) is tc
 
     def test_no_permissions_allows_everything(self) -> None:
         """Agent with no permissions config behaves like Phase 1."""
