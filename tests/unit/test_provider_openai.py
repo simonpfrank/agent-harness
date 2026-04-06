@@ -2,6 +2,8 @@
 
 from unittest.mock import MagicMock, patch
 
+import openai
+
 from agent_harness.providers.openai_provider import (
     _to_openai_messages,
     _to_openai_tools,
@@ -169,3 +171,50 @@ class TestChat:
         result = chat(msgs, tools=[], model="gpt-4o-mini")
         assert result.message.content == "hi"
         mock_client.chat.completions.create.assert_called_once()
+
+    @patch("agent_harness.providers.openai_provider._get_client")
+    @patch("agent_harness.providers.openai_provider.time.sleep")
+    def test_retries_on_rate_limit(self, mock_sleep: MagicMock, mock_get_client: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+
+        error_response = MagicMock()
+        error_response.status_code = 429
+        error_response.headers = {}
+        rate_error = openai.RateLimitError(
+            message="rate limited", response=error_response, body=None,
+        )
+        choice = MagicMock()
+        choice.message.role = "assistant"
+        choice.message.content = "ok"
+        choice.message.tool_calls = None
+        choice.finish_reason = "stop"
+        success = MagicMock()
+        success.choices = [choice]
+        success.usage.prompt_tokens = 10
+        success.usage.completion_tokens = 5
+        mock_client.chat.completions.create.side_effect = [rate_error, success]
+
+        result = chat([Message(role="user", content="hi")], tools=[])
+        assert result.message.content == "ok"
+        assert mock_client.chat.completions.create.call_count == 2
+
+    @patch("agent_harness.providers.openai_provider._get_client")
+    def test_auth_error_fails_immediately(self, mock_get_client: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+
+        error_response = MagicMock()
+        error_response.status_code = 401
+        error_response.headers = {}
+        auth_error = openai.AuthenticationError(
+            message="bad key", response=error_response, body=None,
+        )
+        mock_client.chat.completions.create.side_effect = auth_error
+
+        try:
+            chat([Message(role="user", content="hi")], tools=[])
+            raise AssertionError("Should have raised")
+        except RuntimeError as exc:
+            assert "API key" in str(exc) or "authentication" in str(exc).lower()
+        assert mock_client.chat.completions.create.call_count == 1

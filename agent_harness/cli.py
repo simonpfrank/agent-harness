@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 
 from dotenv import load_dotenv
+from rich.console import Console
 
 from agent_harness import config as config_loader
 from agent_harness.budget import Budget
@@ -16,11 +18,16 @@ from agent_harness.display import (
     show_tool_call,
     show_tool_result,
 )
+from agent_harness.hooks import Hooks
+from agent_harness.log import setup_logging
 from agent_harness.loops import registry as loop_registry
+from agent_harness.permissions import Permissions
 from agent_harness.providers import registry as provider_registry
 from agent_harness.tools import execute_tool, generate_schema
 from agent_harness.tools import registry as tool_registry
 from agent_harness.types import AgentConfig, LoopCallbacks, Message, Response, ToolCall, ToolResult, Usage
+
+_console = Console()
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -78,21 +85,49 @@ def _build_system_prompt(config: AgentConfig) -> str:
     return prompt
 
 
-def _make_callbacks(budget: Budget) -> LoopCallbacks:
-    """Create display callbacks for the loop.
+def _permission_prompt(tool_call: ToolCall) -> bool:
+    """Ask the user whether to allow a tool call.
+
+    Args:
+        tool_call: The tool call requesting approval.
+
+    Returns:
+        True if the user approves.
+    """
+    args_str = json.dumps(tool_call.arguments, indent=2)
+    _console.print(f"[bold yellow]Tool:[/bold yellow] {tool_call.name}")
+    _console.print(f"[bold yellow]Args:[/bold yellow] {args_str}")
+    choice = _console.input("[a]llow once / allow for [s]ession / [d]eny? ").strip().lower()
+    return choice in ("a", "s")
+
+
+def _make_callbacks(budget: Budget, hooks: Hooks, permissions: Permissions) -> LoopCallbacks:
+    """Create display callbacks with hooks and permissions.
 
     Args:
         budget: Budget tracker.
+        hooks: Safety hooks.
+        permissions: Tool permissions.
 
     Returns:
-        LoopCallbacks with display and budget tracking wired in.
+        LoopCallbacks with security and display wired in.
     """
     def on_response(response: Response) -> None:
         show_response(response)
 
     def on_tool_call(tool_call: ToolCall) -> ToolResult:
         show_tool_call(tool_call)
-        result = execute_tool(tool_call)
+        checked = hooks.run_before_tool(tool_call)
+        if checked is None:
+            result = ToolResult(tool_call_id=tool_call.id, error="Blocked by safety hook")
+            show_tool_result(result)
+            return result
+        if not permissions.check(checked):
+            result = ToolResult(tool_call_id=tool_call.id, error="Denied by user")
+            show_tool_result(result)
+            return result
+        result = execute_tool(checked)
+        result = hooks.run_after_tool(checked, result)
         show_tool_result(result)
         return result
 
@@ -123,11 +158,15 @@ def run_agent(agent_dir: str, prompt: str | None = None, verbose: bool = False) 
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 
+    setup_logging(agent_dir=config.agent_dir, verbose=verbose)
+
     chat_fn = provider_registry[config.provider]
     loop_fn = loop_registry[config.loop]
     budget = Budget(config)
+    hooks = Hooks(config.hooks)
+    permissions = Permissions(config.permissions, prompt_fn=_permission_prompt)
     tool_schemas = [generate_schema(tool_registry[t]) for t in config.tools]
-    callbacks = _make_callbacks(budget)
+    callbacks = _make_callbacks(budget, hooks, permissions)
     system_prompt = _build_system_prompt(config)
     messages: list[Message] = [Message(role="system", content=system_prompt)]
 

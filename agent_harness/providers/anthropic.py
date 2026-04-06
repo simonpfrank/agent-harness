@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from typing import Any
 
 import anthropic
 
 from agent_harness.types import Message, Response, ToolCall, Usage
+
+logger = logging.getLogger(__name__)
+
+_MAX_RETRIES = 3
+_BACKOFF_SECONDS = [1, 2, 4]
 
 _client: anthropic.Anthropic | None = None
 
@@ -174,5 +181,21 @@ def chat(
     if api_tools:
         create_kwargs["tools"] = api_tools
 
-    api_response = _get_client().messages.create(**create_kwargs)
-    return _to_response(api_response)
+    for attempt in range(_MAX_RETRIES):
+        try:
+            api_response = _get_client().messages.create(**create_kwargs)
+            return _to_response(api_response)
+        except anthropic.AuthenticationError:
+            raise RuntimeError(
+                "Anthropic API key invalid or not set — export ANTHROPIC_API_KEY"
+            ) from None
+        except anthropic.BadRequestError:
+            raise
+        except anthropic.APIError as exc:
+            if attempt < _MAX_RETRIES - 1:
+                delay = _BACKOFF_SECONDS[attempt]
+                logger.warning("Anthropic API error (attempt %d): %s — retrying in %ds", attempt + 1, exc, delay)
+                time.sleep(delay)
+            else:
+                raise RuntimeError(f"Anthropic API failed after {_MAX_RETRIES} attempts: {exc}") from exc
+    raise RuntimeError("Unreachable")

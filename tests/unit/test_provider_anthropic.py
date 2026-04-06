@@ -2,6 +2,8 @@
 
 from unittest.mock import MagicMock, patch
 
+import anthropic
+
 from agent_harness.providers.anthropic import (
     _to_anthropic_messages,
     _to_anthropic_tools,
@@ -120,3 +122,66 @@ class TestChat:
         result = chat(msgs, tools=[], model="claude-haiku-4-5-20251001")
         assert result.message.content == "hi"
         mock_client.messages.create.assert_called_once()
+
+    @patch("agent_harness.providers.anthropic._get_client")
+    @patch("agent_harness.providers.anthropic.time.sleep")
+    def test_retries_on_rate_limit(self, mock_sleep: MagicMock, mock_get_client: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+
+        error_response = MagicMock()
+        error_response.status_code = 429
+        rate_limit_error = anthropic.RateLimitError(
+            message="rate limited", response=error_response, body=None,
+        )
+        text_block = MagicMock(type="text", text="ok")
+        success = MagicMock()
+        success.content = [text_block]
+        success.usage.input_tokens = 10
+        success.usage.output_tokens = 5
+        success.stop_reason = "end_turn"
+        mock_client.messages.create.side_effect = [rate_limit_error, success]
+
+        result = chat([Message(role="user", content="hi")], tools=[])
+        assert result.message.content == "ok"
+        assert mock_client.messages.create.call_count == 2
+        mock_sleep.assert_called_once()
+
+    @patch("agent_harness.providers.anthropic._get_client")
+    def test_auth_error_fails_immediately(self, mock_get_client: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+
+        error_response = MagicMock()
+        error_response.status_code = 401
+        auth_error = anthropic.AuthenticationError(
+            message="bad key", response=error_response, body=None,
+        )
+        mock_client.messages.create.side_effect = auth_error
+
+        try:
+            chat([Message(role="user", content="hi")], tools=[])
+            raise AssertionError("Should have raised")
+        except RuntimeError as exc:
+            assert "API key" in str(exc) or "authentication" in str(exc).lower()
+        assert mock_client.messages.create.call_count == 1
+
+    @patch("agent_harness.providers.anthropic._get_client")
+    @patch("agent_harness.providers.anthropic.time.sleep")
+    def test_max_retries_exceeded(self, mock_sleep: MagicMock, mock_get_client: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+
+        error_response = MagicMock()
+        error_response.status_code = 500
+        server_error = anthropic.InternalServerError(
+            message="server error", response=error_response, body=None,
+        )
+        mock_client.messages.create.side_effect = server_error
+
+        try:
+            chat([Message(role="user", content="hi")], tools=[])
+            raise AssertionError("Should have raised")
+        except RuntimeError as exc:
+            assert "3 attempts" in str(exc)
+        assert mock_client.messages.create.call_count == 3
