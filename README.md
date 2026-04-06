@@ -166,7 +166,75 @@ Both providers retry transient errors (rate limits, server errors) with exponent
 
 - `run_command` — run a shell command (uses `shlex.split`, no `shell=True`)
 - `read_file` — read file contents
-- `execute_code` — run Python or bash snippets (30s timeout)
+- `execute_code` — run Python or bash snippets (configurable timeout, default 30s)
+
+## Code Execution
+
+`execute_code` delegates to a pluggable executor. The default is `subprocess` (runs code directly on your machine).
+
+```yaml
+# config.yaml — default, runs locally
+executor: subprocess
+tool_timeout: 30
+max_output_chars: 10000
+```
+
+### Custom executors
+
+Register your own executor to sandbox code execution. An executor is a function with this signature:
+
+```python
+def my_executor(code: str, language: str, timeout: int) -> str:
+    """Execute code and return combined stdout/stderr."""
+    ...
+```
+
+Register it before running the agent:
+
+```python
+from agent_harness.tools import executor_registry
+executor_registry["docker"] = my_docker_executor
+```
+
+Then in your agent's `config.yaml`:
+
+```yaml
+executor: docker
+```
+
+### Example: Docker executor
+
+A Docker executor provides real sandboxing — no filesystem access, no network (unless you choose), resource limits. Here's a minimal implementation:
+
+```python
+import subprocess
+
+def docker_executor(code: str, language: str, timeout: int) -> str:
+    image = "python:3.12-slim" if language == "python" else "bash:latest"
+    result = subprocess.run(
+        [
+            "docker", "run", "--rm",
+            "--network=none",           # no network access
+            "--memory=128m",            # memory limit
+            "--cpus=0.5",               # CPU limit
+            image,
+            "python" if language == "python" else "bash",
+            "-c", code,
+        ],
+        capture_output=True, text=True, timeout=timeout + 5,
+    )
+    output = result.stdout
+    if result.stderr:
+        output += result.stderr
+    return output
+```
+
+This is an example, not production code. For production use, consider:
+- Pre-pulling images to avoid timeout on first run
+- Using `--read-only` filesystem
+- Dropping all Linux capabilities (`--cap-drop=ALL`)
+- Setting `--pids-limit` to prevent fork bombs
+- Mapping a temp volume for file I/O
 
 ## Logging
 

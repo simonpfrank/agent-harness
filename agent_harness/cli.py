@@ -184,6 +184,7 @@ def run_agent(agent_dir: str, prompt: str | None = None, verbose: bool = False) 
     permissions = Permissions(config.permissions, prompt_fn=_permission_prompt)
     from agent_harness import tools as tools_module
     tools_module.tool_timeout = config.tool_timeout
+    tools_module.active_executor = config.executor
     tool_schemas = [generate_schema(tool_registry[t]) for t in config.tools]
     callbacks = _make_callbacks(budget, hooks, permissions, config.max_output_chars)
     system_prompt = _build_system_prompt(config)

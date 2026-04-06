@@ -118,6 +118,29 @@ class TestExecuteCode:
         assert "err" in output
 
 
+class TestExecutorRegistry:
+    def test_subprocess_is_default(self) -> None:
+        from agent_harness.tools import executor_registry
+        assert "subprocess" in executor_registry
+
+    def test_custom_executor(self) -> None:
+        from agent_harness.tools import executor_registry
+
+        def fake_executor(code: str, language: str, timeout: int) -> str:
+            return f"fake: {code}"
+
+        executor_registry["fake"] = fake_executor
+        try:
+            from agent_harness import tools
+            old = tools.active_executor
+            tools.active_executor = "fake"
+            output = execute_code("print('hi')")
+            assert output == "fake: print('hi')"
+        finally:
+            tools.active_executor = old
+            del executor_registry["fake"]
+
+
 class TestExecuteToolTruncation:
     def test_output_truncated(self) -> None:
         tc = ToolCall(id="tc_1", name="execute_code", arguments={"code": "print('x' * 200)"})

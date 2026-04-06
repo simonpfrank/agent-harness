@@ -126,8 +126,38 @@ def read_file(path: str) -> str:
     return Path(path).read_text()
 
 
+def _subprocess_executor(code: str, language: str, timeout: int) -> str:
+    """Execute code via subprocess.
+
+    Args:
+        code: The code to execute.
+        language: python or bash.
+        timeout: Execution timeout in seconds.
+
+    Returns:
+        Combined stdout and stderr output.
+    """
+    args = ["bash", "-c", code] if language == "bash" else [sys.executable, "-c", code]
+    result = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+    output = result.stdout
+    if result.stderr:
+        output += result.stderr
+    return output
+
+
+Executor = Callable[[str, str, int], str]
+
+executor_registry: dict[str, Executor] = {
+    "subprocess": _subprocess_executor,
+}
+
+active_executor: str = "subprocess"
+
+
 def execute_code(code: str, language: str = "python") -> str:
     """Execute a code snippet and return stdout and stderr.
+
+    Delegates to the active executor (default: subprocess).
 
     Args:
         code: The code to execute
@@ -136,18 +166,8 @@ def execute_code(code: str, language: str = "python") -> str:
     Returns:
         Combined stdout and stderr output.
     """
-    args = ["bash", "-c", code] if language == "bash" else [sys.executable, "-c", code]
-
-    result = subprocess.run(
-        args,
-        capture_output=True,
-        text=True,
-        timeout=tool_timeout,
-    )
-    output = result.stdout
-    if result.stderr:
-        output += result.stderr
-    return output
+    executor = executor_registry[active_executor]
+    return executor(code, language, tool_timeout)
 
 
 registry: dict[str, Callable[..., str]] = {
