@@ -1,0 +1,126 @@
+"""Integration tests — real config, real tools, real API calls.
+
+Tests requiring ANTHROPIC_API_KEY are skipped if the key is not set.
+"""
+
+import os
+
+import pytest
+from dotenv import load_dotenv
+
+from agent_harness.budget import Budget
+from agent_harness.config import load
+from agent_harness.loops.react import run
+from agent_harness.providers import registry as provider_registry
+from agent_harness.tools import execute_tool, generate_schema, registry as tool_registry
+from agent_harness.types import Message, Usage
+
+load_dotenv()
+
+requires_api_key = pytest.mark.skipif(
+    not os.environ.get("ANTHROPIC_API_KEY"),
+    reason="ANTHROPIC_API_KEY not set",
+)
+
+
+class TestConfigAndToolsIntegration:
+    def test_load_hello_agent(self) -> None:
+        cfg = load("agents/hello")
+        assert cfg.name == "hello"
+        assert cfg.provider == "anthropic"
+        assert set(cfg.tools) == {"run_command", "read_file", "execute_code"}
+
+    def test_generate_schemas_for_configured_tools(self) -> None:
+        cfg = load("agents/hello")
+        schemas = [generate_schema(tool_registry[t]) for t in cfg.tools]
+        assert len(schemas) == 3
+        names = {s["name"] for s in schemas}
+        assert names == {"run_command", "read_file", "execute_code"}
+
+    def test_tool_execution_read_file(self) -> None:
+        from agent_harness.types import ToolCall
+
+        tc = ToolCall(id="tc_1", name="read_file",
+                      arguments={"path": "agents/hello/instructions.md"})
+        result = execute_tool(tc)
+        assert result.error is None
+        assert "helpful assistant" in (result.output or "")
+
+    def test_tool_error_returned_not_crashed(self) -> None:
+        from agent_harness.types import ToolCall
+
+        tc = ToolCall(id="tc_2", name="read_file",
+                      arguments={"path": "/nonexistent/path.txt"})
+        result = execute_tool(tc)
+        assert result.error is not None
+        assert result.output is None
+
+
+class TestInvalidConfig:
+    def test_missing_instructions_raises(self) -> None:
+        with pytest.raises(FileNotFoundError):
+            load("tests/data/invalid_agent_no_instructions")
+
+    def test_bad_provider_raises(self) -> None:
+        with pytest.raises(ValueError, match="provider"):
+            load("tests/data/invalid_agent_bad_provider")
+
+
+@requires_api_key
+class TestRealLLMIntegration:
+    def test_single_turn_simple_question(self) -> None:
+        """LLM answers a simple question without tool use."""
+        cfg = load("agents/hello")
+        chat_fn = provider_registry[cfg.provider]
+        schemas = [generate_schema(tool_registry[t]) for t in cfg.tools]
+
+        messages = [
+            Message(role="system", content=cfg.instructions),
+            Message(role="user", content="What is 2 + 2? Reply with just the number."),
+        ]
+        result = run(chat_fn, messages, schemas, cfg)
+        assert "4" in result
+
+    def test_tool_use_list_files(self) -> None:
+        """LLM uses run_command to list files."""
+        cfg = load("agents/hello")
+        chat_fn = provider_registry[cfg.provider]
+        schemas = [generate_schema(tool_registry[t]) for t in cfg.tools]
+
+        messages = [
+            Message(role="system", content=cfg.instructions),
+            Message(role="user", content="List the files in the agents/hello directory."),
+        ]
+        result = run(chat_fn, messages, schemas, cfg, on_tool_call=execute_tool)
+        assert "config.yaml" in result or "instructions.md" in result
+
+    def test_tool_use_read_file(self) -> None:
+        """LLM uses read_file to read a file and report contents."""
+        cfg = load("agents/hello")
+        chat_fn = provider_registry[cfg.provider]
+        schemas = [generate_schema(tool_registry[t]) for t in cfg.tools]
+
+        messages = [
+            Message(role="system", content=cfg.instructions),
+            Message(role="user", content="Read agents/hello/config.yaml and tell me the model name."),
+        ]
+        result = run(chat_fn, messages, schemas, cfg, on_tool_call=execute_tool)
+        assert "haiku" in result.lower() or "claude" in result.lower()
+
+    def test_budget_tracking_real(self) -> None:
+        """Budget tracks real token usage."""
+        cfg = load("agents/hello")
+        chat_fn = provider_registry[cfg.provider]
+        budget = Budget(cfg)
+
+        def on_budget(usage: Usage) -> bool:
+            return budget.record(usage)
+
+        messages = [
+            Message(role="system", content=cfg.instructions),
+            Message(role="user", content="Say hello in one word."),
+        ]
+        run(chat_fn, messages, [], cfg, on_budget=on_budget)
+        summary = budget.summary()
+        assert "1" in summary
+        assert "$" in summary

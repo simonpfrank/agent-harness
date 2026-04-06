@@ -1,0 +1,155 @@
+"""Tool registry, schema generation, and built-in tools."""
+
+from __future__ import annotations
+
+import inspect
+import shlex
+import subprocess
+import sys
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any, get_type_hints
+
+from agent_harness.types import ToolCall, ToolResult
+
+_TYPE_MAP: dict[type[Any], str] = {
+    str: "string",
+    int: "integer",
+    float: "number",
+    bool: "boolean",
+}
+
+
+def _parse_arg_descriptions(docstring: str) -> dict[str, str]:
+    """Extract argument descriptions from Google-style docstring."""
+    descriptions: dict[str, str] = {}
+    in_args = False
+    for line in docstring.splitlines():
+        stripped = line.strip()
+        if stripped == "Args:":
+            in_args = True
+            continue
+        if in_args:
+            if stripped == "" or (not stripped.startswith(" ") and ":" not in stripped and stripped.endswith(":")):
+                break
+            if ":" in stripped:
+                name, desc = stripped.split(":", 1)
+                descriptions[name.strip()] = desc.strip()
+    return descriptions
+
+
+def generate_schema(fn: Callable[..., Any]) -> dict[str, Any]:
+    """Generate JSON Schema from a typed function with docstring.
+
+    Args:
+        fn: Function to generate schema for
+
+    Returns:
+        Dict with name, description, and input_schema keys.
+    """
+    sig = inspect.signature(fn)
+    hints = get_type_hints(fn)
+    docstring = inspect.getdoc(fn) or ""
+    first_line = docstring.split("\n")[0].strip()
+    arg_descs = _parse_arg_descriptions(docstring)
+
+    properties: dict[str, Any] = {}
+    required: list[str] = []
+
+    for name, param in sig.parameters.items():
+        if name == "return":
+            continue
+        hint = hints.get(name, str)
+        prop: dict[str, str] = {"type": _TYPE_MAP.get(hint, "string")}
+        if name in arg_descs:
+            prop["description"] = arg_descs[name]
+        properties[name] = prop
+        if param.default is inspect.Parameter.empty:
+            required.append(name)
+
+    return {
+        "name": fn.__name__,
+        "description": first_line,
+        "input_schema": {
+            "type": "object",
+            "properties": properties,
+            "required": required,
+        },
+    }
+
+
+def run_command(command: str, working_dir: str = ".") -> str:
+    """Run a shell command and return its output.
+
+    Args:
+        command: The command to run (e.g. "ls -la")
+        working_dir: Directory to run the command in
+    """
+    args = shlex.split(command)
+    result = subprocess.run(
+        args,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        cwd=working_dir,
+    )
+    output = result.stdout
+    if result.stderr:
+        output += result.stderr
+    return output
+
+
+def read_file(path: str) -> str:
+    """Read a file and return its contents.
+
+    Args:
+        path: Path to the file to read
+    """
+    return Path(path).read_text()
+
+
+def execute_code(code: str, language: str = "python") -> str:
+    """Execute a code snippet and return stdout and stderr.
+
+    Args:
+        code: The code to execute
+        language: python or bash
+    """
+    args = ["bash", "-c", code] if language == "bash" else [sys.executable, "-c", code]
+
+    result = subprocess.run(
+        args,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    output = result.stdout
+    if result.stderr:
+        output += result.stderr
+    return output
+
+
+registry: dict[str, Callable[..., str]] = {
+    "run_command": run_command,
+    "read_file": read_file,
+    "execute_code": execute_code,
+}
+
+
+def execute_tool(tool_call: ToolCall) -> ToolResult:
+    """Execute a tool call and return the result.
+
+    Args:
+        tool_call: The tool invocation to execute
+
+    Returns:
+        ToolResult with output or error.
+    """
+    fn = registry.get(tool_call.name)
+    if fn is None:
+        return ToolResult(tool_call_id=tool_call.id, error=f"Unknown tool: {tool_call.name}")
+    try:
+        output = fn(**tool_call.arguments)
+        return ToolResult(tool_call_id=tool_call.id, output=output)
+    except Exception as exc:
+        return ToolResult(tool_call_id=tool_call.id, error=str(exc))
