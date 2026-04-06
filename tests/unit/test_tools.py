@@ -4,12 +4,12 @@ import os
 import tempfile
 
 from agent_harness.tools import (
+    execute_code,
     execute_tool,
     generate_schema,
     read_file,
     registry,
     run_command,
-    execute_code,
 )
 from agent_harness.types import ToolCall
 
@@ -98,11 +98,10 @@ class TestReadFile:
         assert content == "test content"
 
     def test_missing_file_raises(self) -> None:
-        try:
+        import pytest
+
+        with pytest.raises(FileNotFoundError):
             read_file("/no/such/file.txt")
-            assert False, "Should have raised"
-        except FileNotFoundError:
-            pass
 
 
 class TestExecuteCode:

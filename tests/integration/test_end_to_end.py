@@ -12,8 +12,9 @@ from agent_harness.budget import Budget
 from agent_harness.config import load
 from agent_harness.loops.react import run
 from agent_harness.providers import registry as provider_registry
-from agent_harness.tools import execute_tool, generate_schema, registry as tool_registry
-from agent_harness.types import Message, Usage
+from agent_harness.tools import execute_tool, generate_schema
+from agent_harness.tools import registry as tool_registry
+from agent_harness.types import LoopCallbacks, Message, Usage
 
 load_dotenv()
 
@@ -62,8 +63,11 @@ class TestInvalidConfig:
             load("tests/data/invalid_agent_no_instructions")
 
     def test_bad_provider_raises(self) -> None:
+        from agent_harness.cli import validate_config
+
+        cfg = load("tests/data/invalid_agent_bad_provider")
         with pytest.raises(ValueError, match="provider"):
-            load("tests/data/invalid_agent_bad_provider")
+            validate_config(cfg)
 
 
 @requires_api_key
@@ -91,7 +95,8 @@ class TestRealLLMIntegration:
             Message(role="system", content=cfg.instructions),
             Message(role="user", content="List the files in the agents/hello directory."),
         ]
-        result = run(chat_fn, messages, schemas, cfg, on_tool_call=execute_tool)
+        cb = LoopCallbacks(on_tool_call=execute_tool)
+        result = run(chat_fn, messages, schemas, cfg, callbacks=cb)
         assert "config.yaml" in result or "instructions.md" in result
 
     def test_tool_use_read_file(self) -> None:
@@ -104,7 +109,8 @@ class TestRealLLMIntegration:
             Message(role="system", content=cfg.instructions),
             Message(role="user", content="Read agents/hello/config.yaml and tell me the model name."),
         ]
-        result = run(chat_fn, messages, schemas, cfg, on_tool_call=execute_tool)
+        cb = LoopCallbacks(on_tool_call=execute_tool)
+        result = run(chat_fn, messages, schemas, cfg, callbacks=cb)
         assert "haiku" in result.lower() or "claude" in result.lower()
 
     def test_budget_tracking_real(self) -> None:
@@ -120,7 +126,8 @@ class TestRealLLMIntegration:
             Message(role="system", content=cfg.instructions),
             Message(role="user", content="Say hello in one word."),
         ]
-        run(chat_fn, messages, [], cfg, on_budget=on_budget)
+        cb = LoopCallbacks(on_budget=on_budget)
+        run(chat_fn, messages, [], cfg, callbacks=cb)
         summary = budget.summary()
         assert "1" in summary
         assert "$" in summary

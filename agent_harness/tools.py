@@ -21,7 +21,14 @@ _TYPE_MAP: dict[type[Any], str] = {
 
 
 def _parse_arg_descriptions(docstring: str) -> dict[str, str]:
-    """Extract argument descriptions from Google-style docstring."""
+    """Extract argument descriptions from Google-style docstring.
+
+    Args:
+        docstring: Full docstring text.
+
+    Returns:
+        Mapping of argument name to description.
+    """
     descriptions: dict[str, str] = {}
     in_args = False
     for line in docstring.splitlines():
@@ -84,6 +91,9 @@ def run_command(command: str, working_dir: str = ".") -> str:
     Args:
         command: The command to run (e.g. "ls -la")
         working_dir: Directory to run the command in
+
+    Returns:
+        Combined stdout and stderr output.
     """
     args = shlex.split(command)
     result = subprocess.run(
@@ -104,6 +114,12 @@ def read_file(path: str) -> str:
 
     Args:
         path: Path to the file to read
+
+    Returns:
+        File contents as string.
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
     """
     return Path(path).read_text()
 
@@ -114,6 +130,9 @@ def execute_code(code: str, language: str = "python") -> str:
     Args:
         code: The code to execute
         language: python or bash
+
+    Returns:
+        Combined stdout and stderr output.
     """
     args = ["bash", "-c", code] if language == "bash" else [sys.executable, "-c", code]
 

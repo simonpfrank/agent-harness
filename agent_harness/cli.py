@@ -20,7 +20,7 @@ from agent_harness.loops import registry as loop_registry
 from agent_harness.providers import registry as provider_registry
 from agent_harness.tools import execute_tool, generate_schema
 from agent_harness.tools import registry as tool_registry
-from agent_harness.types import Message, Response, ToolCall, ToolResult, Usage
+from agent_harness.types import AgentConfig, LoopCallbacks, Message, Response, ToolCall, ToolResult, Usage
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -43,26 +43,50 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def run_agent(agent_dir: str, prompt: str | None = None, verbose: bool = False) -> None:
-    """Load config and run the agent loop.
+def validate_config(config: AgentConfig) -> None:
+    """Validate config references against registries.
 
     Args:
-        agent_dir: Path to agent folder.
-        prompt: Single prompt (None for REPL mode).
-        verbose: Enable verbose output.
+        config: Loaded agent configuration.
+
+    Raises:
+        ValueError: If provider, tool, loop, or max_turns is invalid.
     """
-    try:
-        config = config_loader.load(agent_dir)
-    except (FileNotFoundError, ValueError) as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        sys.exit(1)
+    if config.provider not in provider_registry:
+        raise ValueError(f"Unknown provider: {config.provider}")
+    for tool_name in config.tools:
+        if tool_name not in tool_registry:
+            raise ValueError(f"Unknown tool: {tool_name}")
+    if config.loop not in loop_registry:
+        raise ValueError(f"Unknown loop: {config.loop}")
+    if config.max_turns < 1:
+        raise ValueError(f"max_turns must be > 0, got {config.max_turns}")
 
-    chat_fn = provider_registry[config.provider]
-    loop_fn = loop_registry[config.loop]
-    budget = Budget(config)
 
-    tool_schemas = [generate_schema(tool_registry[t]) for t in config.tools]
+def _build_system_prompt(config: AgentConfig) -> str:
+    """Combine instructions and tools guidance into a system prompt.
 
+    Args:
+        config: Agent configuration.
+
+    Returns:
+        System prompt string.
+    """
+    prompt = config.instructions
+    if config.tools_guidance:
+        prompt += "\n\n" + config.tools_guidance
+    return prompt
+
+
+def _make_callbacks(budget: Budget) -> LoopCallbacks:
+    """Create display callbacks for the loop.
+
+    Args:
+        budget: Budget tracker.
+
+    Returns:
+        LoopCallbacks with display and budget tracking wired in.
+    """
     def on_response(response: Response) -> None:
         show_response(response)
 
@@ -77,33 +101,48 @@ def run_agent(agent_dir: str, prompt: str | None = None, verbose: bool = False) 
         show_budget(budget.summary())
         return exceeded
 
-    system_prompt = config.instructions
-    if config.tools_guidance:
-        system_prompt += "\n\n" + config.tools_guidance
+    return LoopCallbacks(
+        on_response=on_response,
+        on_tool_call=on_tool_call,
+        on_budget=on_budget,
+    )
 
-    def run_once(user_prompt: str, messages: list[Message]) -> list[Message]:
-        messages.append(Message(role="user", content=user_prompt))
-        loop_fn(
-            chat_fn, messages, tool_schemas, config,
-            on_response=on_response,
-            on_tool_call=on_tool_call,
-            on_budget=on_budget,
-        )
-        return messages
 
+def run_agent(agent_dir: str, prompt: str | None = None, verbose: bool = False) -> None:
+    """Load config and run the agent loop.
+
+    Args:
+        agent_dir: Path to agent folder.
+        prompt: Single prompt (None for REPL mode).
+        verbose: Enable verbose output.
+    """
+    try:
+        config = config_loader.load(agent_dir)
+        validate_config(config)
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    chat_fn = provider_registry[config.provider]
+    loop_fn = loop_registry[config.loop]
+    budget = Budget(config)
+    tool_schemas = [generate_schema(tool_registry[t]) for t in config.tools]
+    callbacks = _make_callbacks(budget)
+    system_prompt = _build_system_prompt(config)
     messages: list[Message] = [Message(role="system", content=system_prompt)]
 
     if prompt:
-        run_once(prompt, messages)
+        messages.append(Message(role="user", content=prompt))
+        loop_fn(chat_fn, messages, tool_schemas, config, callbacks)
         return
 
-    # REPL mode
     try:
         while True:
             user_input = prompt_user()
             if user_input.strip().lower() in ("exit", "quit"):
                 break
-            run_once(user_input, messages)
+            messages.append(Message(role="user", content=user_input))
+            loop_fn(chat_fn, messages, tool_schemas, config, callbacks)
     except (KeyboardInterrupt, EOFError):
         print()
 

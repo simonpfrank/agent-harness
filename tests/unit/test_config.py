@@ -4,12 +4,8 @@ import pytest
 
 from agent_harness.config import load
 
-
 VALID = "tests/data/valid_agent"
 NO_INSTRUCTIONS = "tests/data/invalid_agent_no_instructions"
-BAD_PROVIDER = "tests/data/invalid_agent_bad_provider"
-BAD_TOOL = "tests/data/invalid_agent_bad_tool"
-BAD_TURNS = "tests/data/invalid_agent_bad_turns"
 
 
 class TestLoadValid:
@@ -49,18 +45,6 @@ class TestLoadInvalid:
     def test_missing_instructions(self) -> None:
         with pytest.raises(FileNotFoundError):
             load(NO_INSTRUCTIONS)
-
-    def test_bad_provider(self) -> None:
-        with pytest.raises(ValueError, match="provider"):
-            load(BAD_PROVIDER)
-
-    def test_bad_tool(self) -> None:
-        with pytest.raises(ValueError, match="tool"):
-            load(BAD_TOOL)
-
-    def test_bad_max_turns(self) -> None:
-        with pytest.raises(ValueError, match="max_turns"):
-            load(BAD_TURNS)
 
     def test_nonexistent_dir(self) -> None:
         with pytest.raises(FileNotFoundError):

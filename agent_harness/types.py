@@ -77,3 +77,12 @@ class AgentConfig:
 OnResponse = Callable[[Response], None]
 OnToolCall = Callable[[ToolCall], ToolResult | None]
 OnBudget = Callable[[Usage], bool]
+
+
+@dataclass
+class LoopCallbacks:
+    """Optional callbacks for the agent loop."""
+
+    on_response: OnResponse | None = None
+    on_tool_call: OnToolCall | None = None
+    on_budget: OnBudget | None = None

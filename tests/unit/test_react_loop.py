@@ -3,7 +3,15 @@
 from unittest.mock import MagicMock
 
 from agent_harness.loops.react import run
-from agent_harness.types import AgentConfig, Message, Response, ToolCall, ToolResult, Usage
+from agent_harness.types import (
+    AgentConfig,
+    LoopCallbacks,
+    Message,
+    Response,
+    ToolCall,
+    ToolResult,
+    Usage,
+)
 
 
 def _config(max_turns: int = 10) -> AgentConfig:
@@ -17,8 +25,11 @@ def _config(max_turns: int = 10) -> AgentConfig:
     )
 
 
-def _response(content: str, stop_reason: str = "end_turn",
-              tool_calls: list[ToolCall] | None = None) -> Response:
+def _response(
+    content: str,
+    stop_reason: str = "end_turn",
+    tool_calls: list[ToolCall] | None = None,
+) -> Response:
     msg = Message(role="assistant", content=content, tool_calls=tool_calls)
     return Response(message=msg, usage=Usage(10, 5), stop_reason=stop_reason)
 
@@ -53,7 +64,8 @@ class TestRunWithToolCalls:
             return_value=ToolResult(tool_call_id="tc_1", output="hello")
         )
         messages = [Message(role="user", content="read foo")]
-        result = run(chat_fn, messages, [], _config(), on_tool_call=on_tool_call)
+        cb = LoopCallbacks(on_tool_call=on_tool_call)
+        result = run(chat_fn, messages, [], _config(), callbacks=cb)
         assert result == "The file says hello"
         assert chat_fn.call_count == 2
         on_tool_call.assert_called_once_with(tc)
@@ -69,7 +81,8 @@ class TestRunMaxTurns:
             return_value=ToolResult(tool_call_id="tc_1", output="data")
         )
         messages = [Message(role="user", content="go")]
-        run(chat_fn, messages, [], _config(max_turns=3), on_tool_call=on_tool_call)
+        cb = LoopCallbacks(on_tool_call=on_tool_call)
+        run(chat_fn, messages, [], _config(max_turns=3), callbacks=cb)
         assert chat_fn.call_count == 3
 
 
@@ -78,8 +91,8 @@ class TestRunCallbacks:
         resp = _response("hi")
         chat_fn = MagicMock(return_value=resp)
         on_response = MagicMock()
-        run(chat_fn, [Message(role="user", content="hi")], [], _config(),
-            on_response=on_response)
+        cb = LoopCallbacks(on_response=on_response)
+        run(chat_fn, [Message(role="user", content="hi")], [], _config(), callbacks=cb)
         on_response.assert_called_once_with(resp)
 
     def test_on_budget_stops_loop(self) -> None:
@@ -90,7 +103,10 @@ class TestRunCallbacks:
         on_tool_call = MagicMock(
             return_value=ToolResult(tool_call_id="tc_1", output="ok")
         )
-        on_budget = MagicMock(return_value=True)  # budget exceeded immediately
-        run(chat_fn, [Message(role="user", content="go")], [], _config(),
-            on_tool_call=on_tool_call, on_budget=on_budget)
-        assert chat_fn.call_count == 1  # stopped after first call
+        on_budget = MagicMock(return_value=True)
+        cb = LoopCallbacks(on_tool_call=on_tool_call, on_budget=on_budget)
+        run(
+            chat_fn, [Message(role="user", content="go")], [],
+            _config(), callbacks=cb,
+        )
+        assert chat_fn.call_count == 1

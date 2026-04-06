@@ -3,11 +3,11 @@
 from unittest.mock import patch
 
 from agent_harness.display import (
+    prompt_user,
     show_budget,
     show_response,
     show_tool_call,
     show_tool_result,
-    prompt_user,
 )
 from agent_harness.types import Message, Response, ToolCall, ToolResult, Usage
 

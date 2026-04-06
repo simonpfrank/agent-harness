@@ -19,6 +19,50 @@ def _get_client() -> anthropic.Anthropic:
     return _client
 
 
+def _tool_result_to_api(msg: Message) -> dict[str, Any]:
+    """Convert a tool result message to Anthropic API format.
+
+    Args:
+        msg: Message with role="tool" and tool_result set.
+
+    Returns:
+        API-formatted message dict.
+    """
+    tr = msg.tool_result
+    assert tr is not None
+    return {
+        "role": "user",
+        "content": [{
+            "type": "tool_result",
+            "tool_use_id": tr.tool_call_id,
+            "content": tr.output if tr.output else (tr.error or ""),
+            "is_error": tr.error is not None,
+        }],
+    }
+
+
+def _assistant_with_tools_to_api(msg: Message) -> dict[str, Any]:
+    """Convert an assistant message with tool calls to Anthropic API format.
+
+    Args:
+        msg: Message with role="assistant" and tool_calls set.
+
+    Returns:
+        API-formatted message dict.
+    """
+    content: list[dict[str, Any]] = []
+    if msg.content:
+        content.append({"type": "text", "text": msg.content})
+    for tc in msg.tool_calls or []:
+        content.append({
+            "type": "tool_use",
+            "id": tc.id,
+            "name": tc.name,
+            "input": tc.arguments,
+        })
+    return {"role": "assistant", "content": content}
+
+
 def _to_anthropic_messages(
     messages: list[Message],
 ) -> tuple[str | None, list[dict[str, Any]]]:
@@ -36,38 +80,12 @@ def _to_anthropic_messages(
     for msg in messages:
         if msg.role == "system":
             system = msg.content
-            continue
-
-        if msg.role == "tool" and msg.tool_result is not None:
-            tr = msg.tool_result
-            content_text = tr.output if tr.output else (tr.error or "")
-            is_error = tr.error is not None
-            result.append({
-                "role": "user",
-                "content": [{
-                    "type": "tool_result",
-                    "tool_use_id": tr.tool_call_id,
-                    "content": content_text,
-                    "is_error": is_error,
-                }],
-            })
-            continue
-
-        if msg.role == "assistant" and msg.tool_calls:
-            content: list[dict[str, Any]] = []
-            if msg.content:
-                content.append({"type": "text", "text": msg.content})
-            for tc in msg.tool_calls:
-                content.append({
-                    "type": "tool_use",
-                    "id": tc.id,
-                    "name": tc.name,
-                    "input": tc.arguments,
-                })
-            result.append({"role": "assistant", "content": content})
-            continue
-
-        result.append({"role": msg.role, "content": msg.content or ""})
+        elif msg.role == "tool" and msg.tool_result is not None:
+            result.append(_tool_result_to_api(msg))
+        elif msg.role == "assistant" and msg.tool_calls:
+            result.append(_assistant_with_tools_to_api(msg))
+        else:
+            result.append({"role": msg.role, "content": msg.content or ""})
 
     return system, result
 
