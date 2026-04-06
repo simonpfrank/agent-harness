@@ -160,12 +160,18 @@ _BEFORE_REGISTRY: dict[str, BeforeHook] = {
     "network_exfiltration_blocker": network_exfiltration_blocker,
 }
 
-_DEFAULT_BEFORE: list[str] = ["dangerous_command_blocker", "path_traversal_detector"]
+_DEFAULT_BEFORE: list[str] = [
+    "dangerous_command_blocker",
+    "path_traversal_detector",
+    "network_exfiltration_blocker",
+]
 
 _AFTER_REGISTRY: dict[str, AfterHook] = {
     "injection_scanner": injection_scanner,
     "secrets_leakage_scanner": secrets_leakage_scanner,
 }
+
+_DEFAULT_AFTER: list[str] = ["injection_scanner", "secrets_leakage_scanner"]
 
 
 class Hooks:
@@ -179,7 +185,7 @@ class Hooks:
         before_names = hook_config.get("before_tool", _DEFAULT_BEFORE)
         self._before: list[BeforeHook] = [_BEFORE_REGISTRY[name] for name in before_names]
         self._after: list[AfterHook] = [
-            _AFTER_REGISTRY[name] for name in hook_config.get("after_tool", [])
+            _AFTER_REGISTRY[name] for name in hook_config.get("after_tool", _DEFAULT_AFTER)
         ]
 
     def run_before_tool(self, tool_call: ToolCall) -> ToolCall | None:
