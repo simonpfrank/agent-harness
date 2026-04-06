@@ -84,15 +84,87 @@ def injection_scanner(tool_call: ToolCall, result: ToolResult) -> ToolResult:
     return result
 
 
+_NETWORK_COMMAND_PATTERNS = [
+    r"\bcurl\b",
+    r"\bwget\b",
+    r"\bnc\b",
+    r"\bncat\b",
+]
+
+_NETWORK_CODE_PATTERNS = [
+    r"\brequests\.",
+    r"\burllib\b",
+    r"\bhttp\.client\b",
+]
+
+
+def network_exfiltration_blocker(tool_call: ToolCall) -> ToolCall | None:
+    """Block commands and code that make network requests.
+
+    Args:
+        tool_call: The tool call to check.
+
+    Returns:
+        The tool call if safe, None if blocked.
+    """
+    if tool_call.name == "run_command":
+        command = tool_call.arguments.get("command", "")
+        for pattern in _NETWORK_COMMAND_PATTERNS:
+            if re.search(pattern, command):
+                logger.warning("Blocked network command: %s", command)
+                return None
+    elif tool_call.name == "execute_code":
+        code = tool_call.arguments.get("code", "")
+        for pattern in _NETWORK_CODE_PATTERNS:
+            if re.search(pattern, code):
+                logger.warning("Blocked network code: %s", code[:80])
+                return None
+    return tool_call
+
+
+_SECRETS_PATTERNS = [
+    (r"sk-(?:proj-|ant-)?[A-Za-z0-9_-]{6,}", "API key"),
+    (r"ghp_[A-Za-z0-9]{6,}", "GitHub token"),
+    (r"AKIA[A-Z0-9]{12,}", "AWS access key"),
+    (r"-----BEGIN (?:RSA |EC |DSA )?PRIVATE KEY-----", "private key"),
+]
+
+
+def secrets_leakage_scanner(tool_call: ToolCall, result: ToolResult) -> ToolResult:
+    """Redact secrets from tool output before they reach the LLM.
+
+    Args:
+        tool_call: The tool call that produced the result.
+        result: The tool result to scan.
+
+    Returns:
+        Result with secrets redacted, or original if clean.
+    """
+    if result.error or not result.output:
+        return result
+    output = result.output
+    redacted = False
+    for pattern, label in _SECRETS_PATTERNS:
+        if re.search(pattern, output):
+            output = re.sub(pattern, f"[REDACTED {label}]", output)
+            redacted = True
+    if redacted:
+        logger.warning("Redacted secrets in output of %s", tool_call.name)
+        return ToolResult(tool_call_id=result.tool_call_id, output=output)
+    return result
+
+
 _BEFORE_REGISTRY: dict[str, BeforeHook] = {
     "dangerous_command_blocker": dangerous_command_blocker,
     "path_traversal_detector": path_traversal_detector,
+    "network_exfiltration_blocker": network_exfiltration_blocker,
 }
 
 _DEFAULT_BEFORE: list[str] = ["dangerous_command_blocker", "path_traversal_detector"]
 
 _AFTER_REGISTRY: dict[str, AfterHook] = {
     "injection_scanner": injection_scanner,
+    "secrets_leakage_scanner": secrets_leakage_scanner,
 }
 
 
@@ -104,7 +176,7 @@ class Hooks:
     """
 
     def __init__(self, hook_config: dict[str, Any]) -> None:
-        before_names = hook_config["before_tool"] if "before_tool" in hook_config else _DEFAULT_BEFORE
+        before_names = hook_config.get("before_tool", _DEFAULT_BEFORE)
         self._before: list[BeforeHook] = [_BEFORE_REGISTRY[name] for name in before_names]
         self._after: list[AfterHook] = [
             _AFTER_REGISTRY[name] for name in hook_config.get("after_tool", [])
