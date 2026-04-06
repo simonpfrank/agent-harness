@@ -23,6 +23,8 @@ from agent_harness.log import setup_logging
 from agent_harness.loops import registry as loop_registry
 from agent_harness.permissions import Permissions
 from agent_harness.providers import registry as provider_registry
+from agent_harness.scaffold import create_agent
+from agent_harness.session import load_session, save_session
 from agent_harness.tools import execute_tool, generate_schema
 from agent_harness.tools import registry as tool_registry
 from agent_harness.types import AgentConfig, LoopCallbacks, Message, Response, ToolCall, ToolResult, Usage
@@ -45,7 +47,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     run_parser = sub.add_parser("run", help="Run an agent")
     run_parser.add_argument("agent_dir", help="Path to agent folder")
     run_parser.add_argument("prompt", nargs="?", default=None, help="Single prompt")
+    run_parser.add_argument("--session", default=None, help="Session name to save/resume")
     run_parser.add_argument("--verbose", action="store_true", help="Verbose output")
+
+    init_parser = sub.add_parser("init", help="Create a new agent")
+    init_parser.add_argument("name", help="Agent name")
 
     return parser.parse_args(argv)
 
@@ -160,12 +166,18 @@ def _make_callbacks(
     )
 
 
-def run_agent(agent_dir: str, prompt: str | None = None, verbose: bool = False) -> None:
+def run_agent(
+    agent_dir: str,
+    prompt: str | None = None,
+    session: str | None = None,
+    verbose: bool = False,
+) -> None:
     """Load config and run the agent loop.
 
     Args:
         agent_dir: Path to agent folder.
         prompt: Single prompt (None for REPL mode).
+        session: Session name to save/resume.
         verbose: Enable verbose output.
     """
     try:
@@ -185,14 +197,20 @@ def run_agent(agent_dir: str, prompt: str | None = None, verbose: bool = False) 
     from agent_harness import tools as tools_module
     tools_module.tool_timeout = config.tool_timeout
     tools_module.active_executor = config.executor
+    tools_module.memory_dir = f"{config.agent_dir}/memory"
     tool_schemas = [generate_schema(tool_registry[t]) for t in config.tools]
     callbacks = _make_callbacks(budget, hooks, permissions, config.max_output_chars)
     system_prompt = _build_system_prompt(config)
-    messages: list[Message] = [Message(role="system", content=system_prompt)]
+    session_path = f"{config.agent_dir}/sessions/{session}.json" if session else None
+    messages = load_session(session_path) if session_path else []
+    if not messages:
+        messages = [Message(role="system", content=system_prompt)]
 
     if prompt:
         messages.append(Message(role="user", content=prompt))
         loop_fn(chat_fn, messages, tool_schemas, config, callbacks)
+        if session_path:
+            save_session(messages, session_path)
         return
 
     try:
@@ -202,8 +220,12 @@ def run_agent(agent_dir: str, prompt: str | None = None, verbose: bool = False) 
                 break
             messages.append(Message(role="user", content=user_input))
             loop_fn(chat_fn, messages, tool_schemas, config, callbacks)
+            if session_path:
+                save_session(messages, session_path)
     except (KeyboardInterrupt, EOFError):
         print()
+        if session_path:
+            save_session(messages, session_path)
 
 
 def main() -> None:
@@ -211,6 +233,10 @@ def main() -> None:
     load_dotenv()
     args = parse_args()
     if args.command == "run":
-        run_agent(args.agent_dir, prompt=args.prompt, verbose=args.verbose)
+        run_agent(args.agent_dir, prompt=args.prompt, session=args.session, verbose=args.verbose)
+    elif args.command == "init":
+        agent_dir = f"agents/{args.name}"
+        create_agent(agent_dir)
+        print(f"Created agent: {agent_dir}")
     else:
         parse_args(["--help"])

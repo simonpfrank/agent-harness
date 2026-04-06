@@ -10,7 +10,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, get_type_hints
 
-from agent_harness.types import ToolCall, ToolResult
+from agent_harness.types import Message, ToolCall, ToolResult
 
 tool_timeout: int = 30
 
@@ -170,10 +170,112 @@ def execute_code(code: str, language: str = "python") -> str:
     return executor(code, language, tool_timeout)
 
 
+memory_dir: str = ""
+
+
+def save_memory(key: str, content: str) -> str:
+    """Save information to long-term memory.
+
+    Args:
+        key: Memory key (used as filename).
+        content: Content to save.
+
+    Returns:
+        Confirmation message.
+    """
+    mem_path = Path(memory_dir)
+    mem_path.mkdir(parents=True, exist_ok=True)
+    (mem_path / f"{key}.md").write_text(content)
+    return f"Saved memory: {key}"
+
+
+def recall_memory(key: str) -> str:
+    """Recall information from long-term memory.
+
+    Args:
+        key: Memory key to recall.
+
+    Returns:
+        Stored content.
+
+    Raises:
+        FileNotFoundError: If the memory key doesn't exist.
+    """
+    return (Path(memory_dir) / f"{key}.md").read_text()
+
+
+def list_memories() -> str:
+    """List all saved memory keys.
+
+    Returns:
+        Newline-separated list of keys, or a message if empty.
+    """
+    mem_path = Path(memory_dir)
+    if not mem_path.exists():
+        return "No memories saved."
+    keys = sorted(p.stem for p in mem_path.glob("*.md"))
+    return "\n".join(keys) if keys else "No memories saved."
+
+
+agents_dir: str = "agents"
+
+
+def _run_sub_agent(agent_name: str, message: str) -> str:
+    """Run a sub-agent to completion and return its response.
+
+    Args:
+        agent_name: Agent folder name (relative to agents_dir).
+        message: Message to send to the sub-agent.
+
+    Returns:
+        Final text response from the sub-agent.
+    """
+    from agent_harness.budget import Budget
+    from agent_harness.config import load
+    from agent_harness.loops import registry as loop_registry
+    from agent_harness.providers import registry as provider_registry
+
+    agent_path = f"{agents_dir}/{agent_name}"
+    config = load(agent_path)
+    chat_fn = provider_registry[config.provider]
+    loop_fn = loop_registry[config.loop]
+    budget = Budget(config)
+
+    from agent_harness.types import LoopCallbacks, Usage
+
+    def on_budget(usage: Usage) -> bool:
+        return budget.record(usage)
+
+    schemas = [generate_schema(registry[t]) for t in config.tools]
+    messages = [
+        Message(role="system", content=config.instructions),
+        Message(role="user", content=message),
+    ]
+    cb = LoopCallbacks(on_budget=on_budget)
+    return loop_fn(chat_fn, messages, schemas, config, cb)
+
+
+def run_agent(agent_name: str, message: str) -> str:
+    """Run another agent and return its response.
+
+    Args:
+        agent_name: Name of the agent folder (relative to agents directory).
+        message: The message to send to the agent.
+
+    Returns:
+        Final text response from the sub-agent.
+    """
+    return _run_sub_agent(agent_name, message)
+
+
 registry: dict[str, Callable[..., str]] = {
     "run_command": run_command,
     "read_file": read_file,
     "execute_code": execute_code,
+    "save_memory": save_memory,
+    "recall_memory": recall_memory,
+    "list_memories": list_memories,
+    "run_agent": run_agent,
 }
 
 
