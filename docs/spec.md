@@ -602,19 +602,18 @@ Instead of injecting all tool schemas into every prompt, send a compact list (na
 
 Optional `identity.md` file in agent folder — prepended before `instructions.md`. Separates "who you are" from "what you do". Useful for agents that share an identity but have different procedures. ~5 lines in config.py. Inspired by OpenClaw's SOUL.md/AGENTS.md split.
 
-### Backlog — New Loop Patterns
+### Implemented Loop Patterns
 
-See `docs/agentic-design-patterns.md` for full descriptions and mermaid diagrams.
+All implemented. See `docs/agentic-design-patterns.md` for diagrams.
 
-**New loop files (no infrastructure changes):**
-- `loops/rewoo.py` (~50 lines) — ReWOO: plan once with placeholders, execute all tools, solve once. 2 LLM calls total.
-- `loops/reflection.py` (~40 lines) — Reflection/Self-Refine: generate → critique → refine loop until quality threshold.
-- `loops/eval_optimize.py` (~50 lines) — Evaluator-Optimizer: generator + evaluator with rubric scoring, loop until score passes.
-- `loops/ralph.py` (~30 lines) — Ralph Wiggum: run react, check completion, discard context and retry fresh if incomplete.
-- `loops/debate.py` (~70 lines) — Debate/Adversarial: two agents argue, synthesiser reconciles. Shared message list.
+- `loops/rewoo.py` — ReWOO: plan once, execute all tools, solve once (2 LLM calls)
+- `loops/reflection.py` — Reflection: generate → critique → refine until DONE
+- `loops/eval_optimize.py` — Evaluator-Optimizer: generate + score, loop until SCORE >= 7/10
+- `loops/ralph.py` — Ralph Wiggum: fresh context retries until DONE marker
+- `loops/debate.py` — Debate: two perspectives argue N rounds, synthesiser reconciles
+- `routing.py:handoff_agent` — Handoff: pass existing messages to sub-agent
 
-**Routing changes:**
-- Handoff/Relay (~20 lines in routing.py) — pass existing messages to sub-agent instead of fresh context.
+### Backlog — Remaining Patterns
 
 **Script wrappers (no framework changes):**
 - Parallelization (Fan-out/Fan-in) — shell `&` + `wait`, then synthesiser agent.

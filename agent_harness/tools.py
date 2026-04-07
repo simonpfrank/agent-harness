@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, get_type_hints
 
 from agent_harness.memory import list_memories, recall_memory, save_memory
-from agent_harness.routing import run_agent
+from agent_harness.routing import handoff_agent, run_agent
 from agent_harness.types import ToolCall, ToolResult
 
 tool_timeout: int = 30
@@ -180,6 +180,7 @@ registry: dict[str, Callable[..., str]] = {
     "recall_memory": recall_memory,
     "list_memories": list_memories,
     "run_agent": run_agent,
+    "handoff_agent": handoff_agent,
 }
 
 

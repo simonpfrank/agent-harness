@@ -2,7 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
-from agent_harness.routing import run_agent
+from agent_harness.routing import handoff_agent, run_agent
 
 
 class TestRunAgent:
@@ -43,3 +43,22 @@ class TestCascadingDepthLimit:
     def test_depth_resets_after_call(self) -> None:
         from agent_harness import routing as routing_module
         assert routing_module._call_depth == 0
+
+
+class TestHandoffAgent:
+    @patch("agent_harness.routing._handoff_sub_agent")
+    def test_passes_messages_through(self, mock_handoff: MagicMock) -> None:
+        mock_handoff.return_value = "continued conversation"
+        from agent_harness.types import Message
+        msgs = [
+            Message(role="system", content="sys"),
+            Message(role="user", content="hello"),
+            Message(role="assistant", content="hi there"),
+        ]
+        result = handoff_agent("specialist", msgs)
+        assert result == "continued conversation"
+        mock_handoff.assert_called_once_with("specialist", msgs)
+
+    def test_registered_in_registry(self) -> None:
+        from agent_harness.tools import registry
+        assert "handoff_agent" in registry

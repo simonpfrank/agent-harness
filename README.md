@@ -39,7 +39,19 @@ An agent is a folder containing:
 - `instructions.md` — system prompt (what the agent does)
 - `tools.md` (optional) — guidance on tool usage
 
-The runtime loads the config, builds tool schemas from the registry, applies safety hooks, and runs a ReAct loop: call LLM → check hooks → check permissions → execute tool → scan output → repeat until done or budget exceeded.
+The runtime loads the config, builds tool schemas from the registry, applies safety hooks, and runs an agent loop. Seven loop patterns are available:
+
+| Loop | Config value | Pattern |
+|------|-------------|---------|
+| ReAct | `react` (default) | Think → Act → Observe → repeat |
+| Plan-and-Execute | `plan_execute` | Plan all steps → execute each → summarise |
+| ReWOO | `rewoo` | Plan once → execute all tools → solve (2 LLM calls) |
+| Reflection | `reflection` | Generate → critique → refine until satisfied |
+| Evaluator-Optimizer | `eval_optimize` | Generate → score → improve until threshold |
+| Ralph Wiggum | `ralph` | Run → check done → discard and retry fresh |
+| Debate | `debate` | Two perspectives argue → synthesise |
+
+See `docs/agentic-design-patterns.md` for full descriptions and flow diagrams.
 
 ```
 types.py (root — dataclasses only)

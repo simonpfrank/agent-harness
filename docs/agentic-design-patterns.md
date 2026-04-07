@@ -58,7 +58,7 @@ flowchart TD
 
 ### 3. ReWOO (Reasoning Without Observation)
 
-**Status:** Backlog — new loop file `loops/rewoo.py` (~50 lines)
+**Config:** `loop: rewoo`
 
 Plan once with placeholders → execute all tools → solve once with all results. Only 2 LLM calls total vs ReAct's many.
 
@@ -77,7 +77,7 @@ flowchart TD
 
 ### 4. Reflection / Self-Refine
 
-**Status:** Backlog — new loop file `loops/reflection.py` (~40 lines)
+**Config:** `loop: reflection`
 
 Generate → critique → refine loop. The agent evaluates its own output and improves it.
 
@@ -95,7 +95,7 @@ flowchart TD
 
 ### 8. Ralph Wiggum Loop (Naive Persistence)
 
-**Status:** Backlog — new loop file `loops/ralph.py` (~30 lines)
+**Config:** `loop: ralph`
 
 Run agent → check completion → if failed, discard context and retry fresh. The philosophy: the agent *will* fail, and that's fine.
 
@@ -140,7 +140,7 @@ flowchart TD
 
 ### 10. Evaluator-Optimizer
 
-**Status:** Backlog — new loop file `loops/eval_optimize.py` (~50 lines)
+**Config:** `loop: eval_optimize`
 
 Generator produces output, evaluator scores it, loop until quality threshold met.
 
@@ -189,43 +189,43 @@ flowchart TD
 
 ---
 
-## Multi-Agent Patterns — Backlog
-
 ### 11. Handoff / Relay
 
-**Status:** Backlog — routing change (~20 lines in routing.py)
-
-Active agent changes mid-conversation. Needs shared message state between agents.
+**Implementation:** `handoff_agent` tool passes existing conversation to sub-agent.
 
 ```mermaid
 flowchart LR
     A[User] --> B[Agent A]
-    B -->|"handoff(B)"| C[Agent B continues same conversation]
-    C -->|"handoff(C)"| D[Agent C continues same conversation]
+    B -->|"handoff_agent('B', messages)"| C[Agent B continues same conversation]
+    C -->|"handoff_agent('C', messages)"| D[Agent C continues same conversation]
 ```
 
-**What's needed:** Modify `run_agent` to optionally pass existing messages instead of creating fresh ones.
+**Config:** Agent uses `tools: [handoff_agent]`. Sub-agent receives and continues the same message history.
 
 ### 11b. Debate / Adversarial
 
-**Status:** Backlog — new loop file `loops/debate.py` (~70 lines)
+**Config:** `loop: debate` (max_turns = number of debate rounds)
 
-Two agents argue opposing positions, synthesiser reconciles.
+Two perspectives argue, synthesiser reconciles into a balanced answer.
 
 ```mermaid
 flowchart TD
-    A[Question] --> B[Agent A: Argue FOR]
-    A --> C[Agent B: Argue AGAINST]
+    A[Question] --> B[LLM: Argue FOR]
+    A --> C[LLM: Argue AGAINST]
     B --> D[Shared transcript]
     C --> D
     D --> E{More rounds?}
     E -->|Yes| B
     E -->|Yes| C
-    E -->|No| F[Synthesiser: Reconcile into answer]
+    E -->|No| F[LLM: Synthesise balanced answer]
     F --> G[Done]
 ```
 
-**What's needed:** New loop with two chat_fn calls per round + shared message list.
+**When to use:** Decision-making, risk assessment, any task where counterarguments improve quality.
+
+---
+
+## Backlog — Script Wrappers (no framework changes)
 
 ### 14. Parallelization (Fan-out / Fan-in)
 
