@@ -577,3 +577,27 @@ Stream LLM output token-by-token for better UX on long responses. Requires provi
 ### Phase 10 — Evaluation Framework
 
 Run agents against test cases and score quality. Can be approximated today by scripting CLI runs and comparing output. A formal framework would add: test case definitions (input/expected), scoring functions, regression detection.
+
+### Phase 11 — Model Fallback Chains
+
+If primary provider fails (rate limit, outage), try a fallback provider before giving up. Config-driven, ~20 lines in the loop. Inspired by OpenClaw's model failover with circuit breaker.
+
+```yaml
+provider: anthropic
+model: claude-haiku-4-5-20251001
+fallback:
+  provider: openai
+  model: gpt-4o-mini
+```
+
+### Phase 12 — Self-Improving Skills
+
+After a successful multi-step task, the agent can save the approach as a reusable skill in `{agent_dir}/skills/`. Next time a similar task comes up, the skill is loaded into context. Just save_memory with a convention — the LLM decides when to save. Inspired by Hermes Agent's skills system.
+
+### Phase 13 — Lazy Tool Schema Loading
+
+Instead of injecting all tool schemas into every prompt, send a compact list (name + description). The LLM picks which tools it needs, full schemas loaded on demand. Reduces token waste when agents have many tools. Only relevant when tool count exceeds ~15.
+
+### Phase 14 — Identity/Procedure Split
+
+Optional `identity.md` file in agent folder — prepended before `instructions.md`. Separates "who you are" from "what you do". Useful for agents that share an identity but have different procedures. ~5 lines in config.py. Inspired by OpenClaw's SOUL.md/AGENTS.md split.
