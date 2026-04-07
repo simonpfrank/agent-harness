@@ -1,4 +1,4 @@
-"""Reflection loop — generate, critique, refine until satisfied."""
+"""Reflection loop — generate with tools, critique, refine until satisfied."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
+from agent_harness.loops.react import run as react_run
 from agent_harness.types import AgentConfig, LoopCallbacks, Message, Response
 
 logger = logging.getLogger(__name__)
@@ -23,8 +24,10 @@ def run(
     config: AgentConfig,
     callbacks: LoopCallbacks | None = None,
 ) -> str:
-    """Run the reflection loop: generate → critique → refine → repeat.
+    """Run the reflection loop: generate (with tools) → critique → refine → repeat.
 
+    The generate phase uses a react sub-loop so the agent can use tools.
+    The critique phase has no tools — pure reasoning.
     Stops when the critique contains 'DONE' or max_turns iterations reached.
 
     Args:
@@ -35,25 +38,21 @@ def run(
         callbacks: Optional callbacks.
 
     Returns:
-        The last generated (non-critique) response content.
+        The last generated response content.
     """
     cb = callbacks or LoopCallbacks()
     last_output = ""
 
     for iteration in range(config.max_turns):
-        # Generate (or refine)
-        response = chat_fn(messages, tool_schemas, model=config.model, **config.provider_kwargs)
-        messages.append(response.message)
-        last_output = response.message.content or ""
-        if cb.on_response:
-            cb.on_response(response)
-        if cb.on_budget and cb.on_budget(response.usage):
-            break
+        # Generate — use react so tools work
+        last_output = react_run(chat_fn, messages, tool_schemas, config, callbacks)
 
-        # Critique
+        # Critique — no tools, pure reasoning
         messages.append(Message(role="user", content=_CRITIQUE_PROMPT))
         critique = chat_fn(messages, [], model=config.model, **config.provider_kwargs)
         messages.append(critique.message)
+        if cb.on_response:
+            cb.on_response(critique)
         if cb.on_budget and cb.on_budget(critique.usage):
             break
 
