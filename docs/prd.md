@@ -79,17 +79,22 @@ These apply across every feature and decision:
 ### FR3: Tools
 - Tools are plain Python functions with type hints and docstrings
 - JSON schemas auto-generated from function signatures (no manual schema writing)
-- CLI commands as the default tool pattern (subprocess-based, no shell=True)
-- Python function tools for binary data processing (PDFs, images, etc.)
-- File attachments for multimodal input (images/PDFs sent directly to models that support it)
+- Built-in tools: run_command, read_file, execute_code, save_memory, recall_memory, list_memories, run_agent, handoff_agent
 - Tool registry is a simple dict mapping name to callable
-- Code execution as a first-class tool — agents can write and run Python/bash snippets for deterministic answers
+- **Custom tools** live in a project-level `tools/` directory (one function per `.py` file)
+- Custom tools are discovered at startup but only available if listed in agent's config.yaml `tools` list
+- Built-in tools cannot be overwritten by custom tools with the same name
+- No third-party tool marketplace — you write it, you own it
 
-### FR4: Skills (Instructions + Tools)
-- A skill = tools + markdown instructions + config
-- The instructions.md tells the LLM *how* to use the tools effectively
-- This is the difference between an LLM with tools and an agent that knows what it's doing
-- Skills are transferable — copy the agent folder and the skill comes with it
+### FR4: Skills
+- A skill = markdown knowledge + optional scripts describing how to approach a task
+- Skills live in `{skill_name}/SKILL.md` directories, optionally with `scripts/`
+- **Shared skills** in project-level `skills/` directory — available to all agents
+- **Agent-local skills** in `{agent_dir}/skills/` — override shared skills on name collision
+- Skills are auto-loaded into the system prompt (no config needed — presence = active)
+- Skills are NOT tools — they describe *how* to use tools effectively
+- Scripts within skill folders are invoked by the agent via run_command/execute_code
+- No community skill contributions — you write your own
 
 ### FR5: Budget and Cost Control
 - Turn counter with configurable maximum (hard stop)

@@ -558,6 +558,34 @@ No other runtime dependencies. Test dependencies: `pytest`, `pytest-cov`, `ruff`
 
 ---
 
+## Custom Tools and Skills System
+
+### Custom Tools (`tools/`)
+
+Project-level custom tools in `tools/` directory. One Python file per tool, one public function with type hints and docstring.
+
+**Discovery:** At startup, `discover_tools("tools")` scans `tools/*.py`, imports each module, registers the first public function with a return type annotation. Built-in tools cannot be overwritten.
+
+**Access control:** Custom tools only available to an agent if listed in its `config.yaml` tools list. No auto-discovery into agent context.
+
+### Skills (`skills/` + `{agent_dir}/skills/`)
+
+Skills are markdown files describing how to approach tasks, loaded into the system prompt.
+
+**Structure:** Each skill is a directory containing `SKILL.md` and optional `scripts/`:
+```
+skills/csv-analysis/
+  SKILL.md              # loaded into system prompt
+  scripts/
+    validate.py         # agent invokes via run_command/execute_code
+```
+
+**Resolution:** Project-level `skills/` scanned first, then `{agent_dir}/skills/`. Agent-local overrides shared on name collision (same directory name).
+
+**Loading:** Auto-loaded from both locations. All SKILL.md contents appended to system prompt after instructions.md and tools.md.
+
+---
+
 ## Backlog — Future Phases
 
 ### Phase 7 — MCP Support

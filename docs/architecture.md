@@ -38,15 +38,32 @@ agent_harness/
     __init__.py        # loop registry (a dict)
     react.py           # standard react loop
     plan_execute.py    # plan-then-execute loop
+    rewoo.py           # plan once, execute all, solve once
+    reflection.py      # generate/critique/refine
+    eval_optimize.py   # generate/score/improve
+    ralph.py           # fresh context retries
+    debate.py          # two perspectives argue, synthesise
 
-agents/                # example agents (the showcase)
-  research-assistant/
-    instructions.md
-    tools.md
-    config.yaml
-  csv-analyser/
-    instructions.md
-    config.yaml
+tools/                   # project-level custom tools (Python, one function per file)
+  word_count.py          # example: count words
+  file_search.py         # example: glob file search
+
+skills/                  # project-level shared skills (markdown + optional scripts)
+  csv-analysis/
+    SKILL.md             # how to analyse CSV files
+  code-review/
+    SKILL.md             # how to review code
+    scripts/
+      diff_summary.sh    # helper script invoked by the skill
+
+agents/                  # agent folders
+  my-agent/
+    instructions.md      # what this agent does
+    tools.md             # tool usage guidance (optional)
+    config.yaml          # model, provider, tools list, loop pattern
+    skills/              # agent-local skills (override shared by name)
+      specialised/
+        SKILL.md
 
 tests/
   unit/
