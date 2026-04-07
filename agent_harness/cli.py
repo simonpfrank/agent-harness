@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 
 from dotenv import load_dotenv
 from rich.console import Console
@@ -76,6 +77,33 @@ def validate_config(config: AgentConfig) -> None:
         raise ValueError(f"Unknown loop: {config.loop}")
     if config.max_turns < 1:
         raise ValueError(f"max_turns must be > 0, got {config.max_turns}")
+
+
+def _trace_context(tracer: Tracer, config: AgentConfig) -> None:
+    """Record which files were loaded into the agent context.
+
+    Args:
+        tracer: Event tracer.
+        config: Agent configuration.
+    """
+    files: list[str] = [
+        f"{config.agent_dir}/config.yaml",
+        f"{config.agent_dir}/instructions.md",
+    ]
+    tools_md = f"{config.agent_dir}/tools.md"
+    if Path(tools_md).exists():
+        files.append(tools_md)
+
+    # Scan for loaded skills
+    for skills_dir in ["skills", f"{config.agent_dir}/skills"]:
+        skills_path = Path(skills_dir)
+        if skills_path.is_dir():
+            for skill_dir in sorted(skills_path.iterdir()):
+                skill_file = skill_dir / "SKILL.md"
+                if skill_file.exists():
+                    files.append(str(skill_file))
+
+    tracer.record("context_loaded", agent=config.name, files=files, tools=config.tools, loop=config.loop)
 
 
 def _build_system_prompt(config: AgentConfig) -> str:
@@ -246,6 +274,7 @@ def run_agent(
     hooks = Hooks(config.hooks, domain_prompt_fn=_domain_prompt, agent_dir=config.agent_dir)
     permissions = Permissions(config.permissions, prompt_fn=_permission_prompt)
     tracer = Tracer(f"{config.agent_dir}/logs")
+    _trace_context(tracer, config)
     tool_schemas = [generate_schema(tool_registry[t]) for t in config.tools]
     callbacks = _make_callbacks(budget, hooks, permissions, tracer, config.max_output_chars)
     session_path = f"{config.agent_dir}/sessions/{session}.json" if session else None
