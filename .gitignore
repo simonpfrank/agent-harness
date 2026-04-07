@@ -15,3 +15,4 @@ htmlcov/
 **/memory/
 **/.allowed_domains.yaml
 **/.permissions.yaml
+docs/research/
