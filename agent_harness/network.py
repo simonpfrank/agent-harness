@@ -96,7 +96,11 @@ def make_network_blocker(
         if domain and prompt_fn and prompt_fn(domain):
             allowed_domains.add(domain)
             if persist_path:
-                Path(persist_path).write_text(yaml.dump({"domains": sorted(allowed_domains)}))
+                try:
+                    Path(persist_path).parent.mkdir(parents=True, exist_ok=True)
+                    Path(persist_path).write_text(yaml.dump({"domains": sorted(allowed_domains)}))
+                except OSError:
+                    logger.warning("Could not save domain whitelist to %s", persist_path)
             logger.info("Domain whitelisted: %s", domain)
             return tool_call
 

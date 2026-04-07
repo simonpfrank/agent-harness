@@ -74,10 +74,13 @@ def save_session(messages: list[Message], path: str) -> None:
         messages: Conversation history to save.
         path: File path to write to.
     """
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    data = [_message_to_dict(m) for m in messages]
-    Path(path).write_text(json.dumps(data, indent=2))
-    logger.info("Session saved: %d messages to %s", len(messages), path)
+    try:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        data = [_message_to_dict(m) for m in messages]
+        Path(path).write_text(json.dumps(data, indent=2))
+        logger.info("Session saved: %d messages to %s", len(messages), path)
+    except OSError:
+        logger.warning("Could not save session to %s", path)
 
 
 def load_session(path: str) -> list[Message]:
