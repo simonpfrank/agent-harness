@@ -10,6 +10,7 @@ COST_TABLE: dict[tuple[str, str], tuple[float, float]] = {
     ("anthropic", "claude-sonnet-4-6"): (3.00, 15.00),
     ("anthropic", "claude-opus-4-6"): (15.00, 75.00),
     ("openai", "gpt-4o-mini"): (0.15, 0.60),
+    ("openai", "gpt-4o"): (2.50, 10.00),
 }
 
 

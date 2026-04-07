@@ -97,6 +97,13 @@ def load_session(path: str) -> list[Message]:
     except json.JSONDecodeError:
         logger.warning("Corrupted session file: %s — starting fresh", path)
         return []
-    messages = [_dict_to_message(d) for d in data]
+    if not isinstance(data, list):
+        logger.warning("Invalid session format in %s — expected list, starting fresh", path)
+        return []
+    try:
+        messages = [_dict_to_message(d) for d in data]
+    except (KeyError, TypeError) as exc:
+        logger.warning("Malformed message in session %s: %s — starting fresh", path, exc)
+        return []
     logger.info("Session loaded: %d messages from %s", len(messages), path)
     return messages

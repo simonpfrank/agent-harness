@@ -191,4 +191,4 @@ def chat(
                 time.sleep(delay)
             else:
                 raise RuntimeError(f"Anthropic API failed after {_MAX_RETRIES} attempts: {exc}") from exc
-    raise RuntimeError("Unreachable")
+    raise RuntimeError(f"Anthropic API failed after {_MAX_RETRIES} attempts")  # pragma: no cover

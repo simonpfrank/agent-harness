@@ -59,6 +59,7 @@ class TestHandoffAgent:
         assert result == "continued conversation"
         mock_handoff.assert_called_once_with("specialist", msgs)
 
-    def test_registered_in_registry(self) -> None:
+    def test_not_in_tool_registry(self) -> None:
+        """handoff_agent takes list[Message] — not serialisable as LLM tool."""
         from agent_harness.tools import registry
-        assert "handoff_agent" in registry
+        assert "handoff_agent" not in registry

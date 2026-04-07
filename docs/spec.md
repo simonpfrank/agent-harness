@@ -517,29 +517,36 @@ Each is a folder with `instructions.md`, `config.yaml`, and optionally `tools.md
 | File | Phase | Lines | Purpose |
 |------|-------|-------|---------|
 | `types.py` | 1 | 92 | Shared dataclasses and type aliases |
-| `tools.py` | 1 | 222 | Registry, schema generation, core tools, executor |
-| `providers/anthropic.py` | 1 | 182 | Claude provider with retry |
+| `tools.py` | 1 | 269 | Registry, schema generation, core tools, executor |
+| `providers/anthropic.py` | 1 | 194 | Claude provider with retry |
 | `providers/openai_provider.py` | 1+ | 199 | OpenAI/LM Studio provider with retry |
 | `loops/react.py` | 1 | 68 | ReAct loop with context trimming |
 | `loops/plan_execute.py` | 3 | 89 | Plan-then-execute loop |
-| `config.py` | 1 | 77 | Load agent folder |
+| `loops/rewoo.py` | — | 75 | ReWOO loop |
+| `loops/reflection.py` | — | 70 | Reflection/self-refine loop |
+| `loops/eval_optimize.py` | — | 83 | Evaluator-optimizer loop |
+| `loops/ralph.py` | — | 55 | Ralph Wiggum retry loop |
+| `loops/debate.py` | — | 72 | Debate/adversarial loop |
+| `loops/common.py` | — | 65 | Shared loop utilities |
+| `config.py` | 1 | 78 | Load agent folder |
 | `budget.py` | 1 | 61 | Turn/cost tracking |
 | `hooks.py` | 2 | 201 | Safety hook chain + 4 pattern matchers |
 | `network.py` | 2 | 138 | Network blocker with domain whitelist |
-| `permissions.py` | 2 | 92 | Tool approval system |
+| `permissions.py` | 2 | 95 | Tool approval system |
 | `memory.py` | 4 | 60 | Long-term memory tools |
-| `routing.py` | 4 | 67 | Agent-as-tool with depth limiting |
-| `session.py` | 4 | 98 | Session save/load |
+| `routing.py` | 4 | 124 | Agent routing + handoff with depth limiting |
+| `session.py` | 4 | 109 | Session save/load |
 | `context.py` | 3 | 99 | Context window trimming |
 | `scaffold.py` | 4 | 50 | Agent folder scaffolding |
+| `skills.py` | — | 57 | Skill loading from directories |
 | `display.py` | 1 | 66 | Rich console output |
 | `log.py` | 2 | 40 | Logging setup |
-| `trace.py` | 6 | 42 | Structured JSONL traces |
-| `cli.py` | 1 | 260 | Arg parsing, REPL, composition root |
+| `trace.py` | 6 | 46 | Structured JSONL traces |
+| `cli.py` | 1 | 318 | Arg parsing, REPL, composition root |
 | `__main__.py` | 1 | 5 | Entry point |
 | `__init__.py` | 1 | 3 | Package exports |
-| **Total runtime** | | **~2,210** | |
-| **Total tests** | | **222** | 24 source files |
+| **Total runtime** | | **~2,910** | 31 source files |
+| **Total tests** | | **273** | |
 
 ---
 
@@ -550,11 +557,12 @@ Minimal. Each justified:
 | Package | Why | Phase |
 |---------|-----|-------|
 | `anthropic` | Claude API | 1 |
+| `python-dotenv` | Load .env files | 1 |
 | `pyyaml` | Config loading | 1 |
 | `rich` | Console output | 1 |
-| `openai` | OpenAI + LM Studio | 3 |
+| `openai` | OpenAI + LM Studio | 1+ |
 
-No other runtime dependencies. Test dependencies: `pytest`, `pytest-cov`, `ruff`, `mypy`.
+No other runtime dependencies. Test dependencies: `pytest`, `pytest-cov`, `ruff`, `mypy`, `types-PyYAML`.
 
 ---
 

@@ -39,5 +39,8 @@ class Tracer:
             "event": event,
             **data,
         }
-        with open(self._file, "a") as f:
-            f.write(json.dumps(entry) + "\n")
+        try:
+            with open(self._file, "a") as f:
+                f.write(json.dumps(entry) + "\n")
+        except OSError:
+            pass  # Tracing is best-effort — don't crash the agent

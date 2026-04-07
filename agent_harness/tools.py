@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, get_type_hints
 
 from agent_harness.memory import list_memories, recall_memory, save_memory
-from agent_harness.routing import handoff_agent, run_agent
+from agent_harness.routing import run_agent
 from agent_harness.types import ToolCall, ToolResult
 
 tool_timeout: int = 30
@@ -182,8 +182,10 @@ registry: dict[str, Callable[..., str]] = {
     "recall_memory": recall_memory,
     "list_memories": list_memories,
     "run_agent": run_agent,
-    "handoff_agent": handoff_agent,
 }
+# Note: handoff_agent is available via agent_harness.routing but NOT
+# registered as an LLM tool — its list[Message] parameter can't be
+# serialised to JSON schema. Use it programmatically in custom loops.
 
 
 _logger = logging.getLogger(__name__)
