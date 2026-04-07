@@ -146,7 +146,9 @@ def _make_callbacks(
     def on_response(response: Response) -> None:
         show_response(response)
         tracer.record(
-            "turn", model=response.stop_reason,
+            "turn",
+            stop_reason=response.stop_reason,
+            response=response.message.content,
             input_tokens=response.usage.input_tokens,
             output_tokens=response.usage.output_tokens,
         )
@@ -155,19 +157,19 @@ def _make_callbacks(
         show_tool_call(tool_call)
         checked = hooks.run_before_tool(tool_call)
         if checked is None:
-            tracer.record("tool_blocked", tool=tool_call.name, reason="safety_hook")
+            tracer.record("tool_blocked", tool=tool_call.name, reason="safety_hook", args=tool_call.arguments)
             result = ToolResult(tool_call_id=tool_call.id, error="Blocked by safety hook")
             show_tool_result(result)
             return result
         if not permissions.check(checked):
-            tracer.record("tool_denied", tool=tool_call.name, reason="user_denied")
+            tracer.record("tool_denied", tool=tool_call.name, reason="user_denied", args=tool_call.arguments)
             result = ToolResult(tool_call_id=tool_call.id, error="Denied by user")
             show_tool_result(result)
             return result
-        tracer.record("tool_call", tool=checked.name, args=list(checked.arguments.keys()))
+        tracer.record("tool_call", tool=checked.name, args=checked.arguments)
         result = execute_tool(checked, max_output_chars=max_output_chars)
         result = hooks.run_after_tool(checked, result)
-        tracer.record("tool_result", tool=checked.name, chars=len(result.output or ""), error=result.error)
+        tracer.record("tool_result", tool=checked.name, output=result.output, error=result.error)
         show_tool_result(result)
         return result
 
@@ -250,6 +252,7 @@ def run_agent(
     messages = _init_messages(config, session_path)
 
     if prompt:
+        tracer.record("user_prompt", content=prompt)
         messages.append(Message(role="user", content=prompt))
         loop_fn(chat_fn, messages, tool_schemas, config, callbacks)
         if session_path:
@@ -261,6 +264,7 @@ def run_agent(
             user_input = prompt_user()
             if user_input.strip().lower() in ("exit", "quit"):
                 break
+            tracer.record("user_prompt", content=user_input)
             messages.append(Message(role="user", content=user_input))
             loop_fn(chat_fn, messages, tool_schemas, config, callbacks)
             if session_path:
