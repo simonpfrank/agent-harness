@@ -27,6 +27,7 @@ from agent_harness.scaffold import create_agent
 from agent_harness.session import load_session, save_session
 from agent_harness.tools import execute_tool, generate_schema
 from agent_harness.tools import registry as tool_registry
+from agent_harness.trace import Tracer
 from agent_harness.types import AgentConfig, LoopCallbacks, Message, Response, ToolCall, ToolResult, Usage
 
 _console = Console()
@@ -123,40 +124,53 @@ def _domain_prompt(domain: str) -> bool:
 
 
 def _make_callbacks(
-    budget: Budget, hooks: Hooks, permissions: Permissions, max_output_chars: int = 10_000,
+    budget: Budget, hooks: Hooks, permissions: Permissions,
+    tracer: Tracer, max_output_chars: int = 10_000,
 ) -> LoopCallbacks:
-    """Create display callbacks with hooks and permissions.
+    """Create display callbacks with hooks, permissions, and tracing.
 
     Args:
         budget: Budget tracker.
         hooks: Safety hooks.
         permissions: Tool permissions.
+        tracer: Structured event tracer.
+        max_output_chars: Max tool output before truncation.
 
     Returns:
-        LoopCallbacks with security and display wired in.
+        LoopCallbacks with security, display, and tracing wired in.
     """
     def on_response(response: Response) -> None:
         show_response(response)
+        tracer.record(
+            "turn", model=response.stop_reason,
+            input_tokens=response.usage.input_tokens,
+            output_tokens=response.usage.output_tokens,
+        )
 
     def on_tool_call(tool_call: ToolCall) -> ToolResult:
         show_tool_call(tool_call)
         checked = hooks.run_before_tool(tool_call)
         if checked is None:
+            tracer.record("tool_blocked", tool=tool_call.name, reason="safety_hook")
             result = ToolResult(tool_call_id=tool_call.id, error="Blocked by safety hook")
             show_tool_result(result)
             return result
         if not permissions.check(checked):
+            tracer.record("tool_denied", tool=tool_call.name, reason="user_denied")
             result = ToolResult(tool_call_id=tool_call.id, error="Denied by user")
             show_tool_result(result)
             return result
+        tracer.record("tool_call", tool=checked.name, args=list(checked.arguments.keys()))
         result = execute_tool(checked, max_output_chars=max_output_chars)
         result = hooks.run_after_tool(checked, result)
+        tracer.record("tool_result", tool=checked.name, chars=len(result.output or ""), error=result.error)
         show_tool_result(result)
         return result
 
     def on_budget(usage: Usage) -> bool:
         exceeded = budget.record(usage)
         show_budget(budget.summary())
+        tracer.record("budget", summary=budget.summary())
         return exceeded
 
     return LoopCallbacks(
@@ -223,8 +237,9 @@ def run_agent(
     budget = Budget(config)
     hooks = Hooks(config.hooks, domain_prompt_fn=_domain_prompt, agent_dir=config.agent_dir)
     permissions = Permissions(config.permissions, prompt_fn=_permission_prompt)
+    tracer = Tracer(f"{config.agent_dir}/logs")
     tool_schemas = [generate_schema(tool_registry[t]) for t in config.tools]
-    callbacks = _make_callbacks(budget, hooks, permissions, config.max_output_chars)
+    callbacks = _make_callbacks(budget, hooks, permissions, tracer, config.max_output_chars)
     session_path = f"{config.agent_dir}/sessions/{session}.json" if session else None
     messages = _init_messages(config, session_path)
 

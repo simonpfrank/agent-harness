@@ -78,6 +78,12 @@ Agent Harness includes five built-in safety hooks that filter tool calls and sca
 - **Not comprehensive.** They catch common mistakes and known-bad patterns. They do not make an agent "safe" in any absolute sense.
 - **Not a substitute for review.** If your agent does anything consequential (writes files, runs commands, accesses APIs), you should review its actions.
 
+### Additional protections
+
+- **Memory poisoning defence**: Content saved via `save_memory` is scanned for injection patterns. Suspicious content is prefixed with a warning before being stored.
+- **Cascading failure protection**: `run_agent` has a depth limit (default 3). Agent A calling Agent B calling Agent C is fine; deeper nesting raises an error.
+- **Credential scoping**: Sub-agents load their own `config.yaml`. Give sub-agents a restricted tool list — don't give an orchestrator's sub-agents tools they don't need.
+
 ### Domain whitelist (network blocker)
 
 When the network blocker detects a URL, it extracts the domain and checks a whitelist. If the domain isn't listed, you'll be prompted:
@@ -288,12 +294,21 @@ This is an example, not production code. For production use, consider:
 - Setting `--pids-limit` to prevent fork bombs
 - Mapping a temp volume for file I/O
 
-## Logging
+## Logging and Tracing
 
-Logs are written to `{agent_dir}/logs/YYYY-MM-DD.log` at DEBUG level. Console output is INFO by default, DEBUG with `--verbose`:
+**Human-readable logs** are written to `{agent_dir}/logs/YYYY-MM-DD.log` at DEBUG level. Console output is INFO by default, DEBUG with `--verbose`:
 
 ```bash
 python -m agent_harness run ./agents/hello "hello" --verbose
+```
+
+**Structured traces** are written alongside logs as newline-delimited JSON (`*.trace.jsonl`). Each line is a timestamped event — easy to grep, parse, or pipe into scripts:
+
+```json
+{"ts": "2026-04-06T18:25:38", "event": "turn", "input_tokens": 830, "output_tokens": 75}
+{"ts": "2026-04-06T18:25:38", "event": "tool_call", "tool": "run_command", "args": ["command"]}
+{"ts": "2026-04-06T18:25:38", "event": "tool_result", "tool": "run_command", "chars": 245, "error": null}
+{"ts": "2026-04-06T18:25:39", "event": "budget", "summary": "Turn 2/10 | $0.0017/$0.10"}
 ```
 
 ## Testing

@@ -548,3 +548,25 @@ Minimal. Each justified:
 | `openai` | OpenAI + LM Studio | 3 |
 
 No other runtime dependencies. Test dependencies: `pytest`, `pytest-cov`, `ruff`, `mypy`.
+
+---
+
+## Backlog — Future Phases
+
+### Phase 7 — MCP Support
+
+Connect agents to external tools via [Model Context Protocol](https://modelcontextprotocol.io/). MCP is the emerging standard for tool integration — standardised connectors for Slack, GitHub, databases, file systems without writing custom tool functions.
+
+Scope: MCP client in the harness, config to point at MCP servers, tools auto-discovered from server capabilities.
+
+### Phase 8 — Async Execution
+
+Parallel tool calls and streaming responses. Requires asyncio refactor of the react loop and provider chat functions. Would enable running multiple tools concurrently when the LLM requests them in one response.
+
+### Phase 9 — Streaming Responses
+
+Stream LLM output token-by-token for better UX on long responses. Requires provider-level streaming support and display updates.
+
+### Phase 10 — Evaluation Framework
+
+Run agents against test cases and score quality. Can be approximated today by scripting CLI runs and comparing output. A formal framework would add: test case definitions (input/expected), scoring functions, regression detection.

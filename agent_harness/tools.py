@@ -173,8 +173,17 @@ def execute_code(code: str, language: str = "python") -> str:
 memory_dir: str = ""
 
 
+_INJECTION_PATTERNS = [
+    r"ignore\s+previous",
+    r"^system:",
+    r"<\|im_start\|>",
+]
+
+
 def save_memory(key: str, content: str) -> str:
     """Save information to long-term memory.
+
+    Scans content for injection patterns before saving.
 
     Args:
         key: Memory key (used as filename).
@@ -183,6 +192,12 @@ def save_memory(key: str, content: str) -> str:
     Returns:
         Confirmation message.
     """
+    import re
+
+    for pattern in _INJECTION_PATTERNS:
+        if re.search(pattern, content, re.IGNORECASE | re.MULTILINE):
+            content = f"[WARNING: content flagged by injection scanner]\n{content}"
+            break
     mem_path = Path(memory_dir)
     mem_path.mkdir(parents=True, exist_ok=True)
     (mem_path / f"{key}.md").write_text(content)
@@ -218,6 +233,8 @@ def list_memories() -> str:
 
 
 agents_dir: str = "agents"
+max_agent_depth: int = 3
+_call_depth: int = 0
 
 
 def _run_sub_agent(agent_name: str, message: str) -> str:
@@ -264,8 +281,18 @@ def run_agent(agent_name: str, message: str) -> str:
 
     Returns:
         Final text response from the sub-agent.
+
+    Raises:
+        RuntimeError: If agent call depth exceeds max_agent_depth.
     """
-    return _run_sub_agent(agent_name, message)
+    global _call_depth  # noqa: PLW0603
+    if _call_depth >= max_agent_depth:
+        raise RuntimeError(f"Agent call depth limit exceeded ({max_agent_depth})")
+    _call_depth += 1
+    try:
+        return _run_sub_agent(agent_name, message)
+    finally:
+        _call_depth -= 1
 
 
 registry: dict[str, Callable[..., str]] = {

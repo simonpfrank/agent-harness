@@ -25,3 +25,21 @@ class TestRunAgent:
     def test_registered_in_registry(self) -> None:
         from agent_harness.tools import registry
         assert "run_agent" in registry
+
+
+class TestCascadingDepthLimit:
+    def test_depth_limit_exceeded(self) -> None:
+        from agent_harness import tools as tools_module
+        old_depth = tools_module._call_depth
+        tools_module._call_depth = 3  # already at max
+        try:
+            run_agent("hello", "hi")
+            raise AssertionError("Should have raised")
+        except RuntimeError as exc:
+            assert "depth" in str(exc).lower()
+        finally:
+            tools_module._call_depth = old_depth
+
+    def test_depth_resets_after_call(self) -> None:
+        from agent_harness import tools as tools_module
+        assert tools_module._call_depth == 0
