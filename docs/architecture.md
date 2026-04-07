@@ -16,17 +16,24 @@ agent_harness/
   __main__.py          # python -m agent_harness entry point
   types.py             # shared dataclasses: Message, Response, ToolCall, AgentConfig
   config.py            # load an agent folder into AgentConfig
-  tools.py             # tool registry, schema generation from signatures, built-in tools
+  tools.py             # tool registry, schema generation, core tools, executor registry
   budget.py            # turn counting, token tracking, cost ceiling
-  hooks.py             # deterministic pre/post checkpoints
+  hooks.py             # deterministic pre/post safety hook chain
+  network.py           # network exfiltration blocker with domain whitelist
   permissions.py       # tool approval: once, session, persistent
-  memory.py            # save/load sessions, long-term memory as files
+  memory.py            # long-term memory tools (save/recall/list)
+  routing.py           # agent-as-tool with depth limiting
+  session.py           # save/load conversation sessions as JSON
+  context.py           # context window trimming
+  scaffold.py          # agent folder scaffolding (init command)
   display.py           # rich console output
+  log.py               # console + file logging setup
+  trace.py             # structured JSONL trace per run
   cli.py               # cli arg parsing, repl, composition root
   providers/
     __init__.py        # provider registry (a dict)
     anthropic.py       # chat() for claude
-    openai.py          # chat() for openai-compatible apis (inc. lm studio)
+    openai_provider.py # chat() for openai-compatible apis (inc. lm studio)
   loops/
     __init__.py        # loop registry (a dict)
     react.py           # standard react loop

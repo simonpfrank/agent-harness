@@ -244,8 +244,19 @@ These are all good at what they do. The common trade-off: you need to write and 
 | Project | What it does well | Where it differs |
 |---------|------------------|-----------------|
 | **Fabric** (Daniel Miessler, ~25k stars) | Agents as `system.md` in portable folders. Clean, simple. | Single-turn patterns only — no tool use, no multi-step, no state. |
-| **OpenClaw** | Proved markdown-as-agent-definition works (`SOUL.md`, `AGENTS.md`). | Network daemon with serious security vulnerabilities. Very different design goals. |
+| **OpenClaw** (~250k stars, 2026) | Proved markdown-as-agent-definition works (`SOUL.md`, `AGENTS.md`). 100+ skills, 25+ messaging platforms. Pluggable ContextEngine. | Network daemon with documented security vulnerabilities (OWASP flagged). Very different scope — full personal assistant platform, not a minimal framework. |
+| **Hermes Agent** (Nous Research, 2026) | Self-improving skills system — agent synthesises completed tasks into reusable skill documents. Cross-session memory with FTS5 recall. Multi-platform messaging (Telegram, Discord, Slack, WhatsApp). 40+ built-in tools. 5 deployment backends (local, Docker, SSH, Singularity, Modal). | Much larger scope. Skills self-improvement is genuinely novel — our agents don't learn from experience. Multi-platform messaging is a different product category. |
 | **Claude Code** | `CLAUDE.md` files shape behaviour beautifully. | Locked to Claude Code. Not a general-purpose runner. |
 | **Cursor / Windsurf** | `.cursorrules` markdown files for behaviour. | Locked to their IDEs. |
 
 Fabric is the nearest neighbour — it shares the "agent is a folder of markdown" philosophy. The difference is that Fabric handles single-turn prompt patterns, while this project aims for multi-step agents with tool use and state.
+
+**Notable features from competitors worth considering:**
+
+| Feature | Source | Relevance to us |
+|---------|--------|-----------------|
+| **Self-improving skills** | Hermes Agent | Agent completes a task, synthesises the approach into a reusable skill document (structured markdown). Next time, loads the skill instead of solving from scratch. Reported 40% speedup on repeated tasks. Could fit our agent-as-folder model — a `skills/` directory with markdown files the agent loads. |
+| **Pluggable ContextEngine** | OpenClaw | Custom context management strategies without altering core. We have basic context trimming; a pluggable strategy would allow RAG, summarisation, or sliding window approaches. |
+| **Model fallback chains** | OpenClaw | Automatic failover to secondary provider on rate limit. We retry same provider; chaining to a fallback model would be more resilient. |
+| **Natural language cron** | Hermes Agent | Schedule agent runs in plain English ("every morning at 8am, summarise my inbox"). We have no scheduling. |
+| **Multi-platform messaging** | Hermes, OpenClaw | Both support 10+ messaging platforms. Out of scope for us but validates the agent-as-folder portability concept — the agent definition is platform-independent. |

@@ -512,27 +512,34 @@ Each is a folder with `instructions.md`, `config.yaml`, and optionally `tools.md
 
 ---
 
-## File summary
+## File summary (actual, post-implementation)
 
-| File | Phase | Est. lines | Purpose |
-|------|-------|-----------|---------|
-| `types.py` | 1 | ~55 | Shared dataclasses and type aliases |
-| `tools.py` | 1 | ~120 | Registry, schema generation, built-in tools |
-| `providers/anthropic.py` | 1 | ~70 | Claude provider |
-| `providers/openai.py` | 3 | ~70 | OpenAI/LM Studio provider |
-| `loops/react.py` | 1 | ~45 | ReAct loop |
-| `loops/plan_execute.py` | 3 | ~60 | Plan-then-execute loop |
-| `config.py` | 1 | ~50 | Load and validate agent folder |
-| `budget.py` | 1 | ~45 | Turn/cost tracking |
-| `hooks.py` | 2 | ~80 | Deterministic safety checkpoints |
-| `permissions.py` | 2 | ~60 | Tool approval system |
-| `memory.py` | 4 | ~40 | Session save/load |
-| `display.py` | 1 | ~50 | Rich console output |
-| `cli.py` | 1 | ~80 | Arg parsing, REPL, composition |
-| `__main__.py` | 1 | ~3 | Entry point |
-| `__init__.py` | 1 | ~5 | Package exports |
-| **Phase 1 total** | | **~525** | |
-| **All phases total** | | **~835** | |
+| File | Phase | Lines | Purpose |
+|------|-------|-------|---------|
+| `types.py` | 1 | 92 | Shared dataclasses and type aliases |
+| `tools.py` | 1 | 222 | Registry, schema generation, core tools, executor |
+| `providers/anthropic.py` | 1 | 182 | Claude provider with retry |
+| `providers/openai_provider.py` | 1+ | 199 | OpenAI/LM Studio provider with retry |
+| `loops/react.py` | 1 | 68 | ReAct loop with context trimming |
+| `loops/plan_execute.py` | 3 | 89 | Plan-then-execute loop |
+| `config.py` | 1 | 77 | Load agent folder |
+| `budget.py` | 1 | 61 | Turn/cost tracking |
+| `hooks.py` | 2 | 201 | Safety hook chain + 4 pattern matchers |
+| `network.py` | 2 | 138 | Network blocker with domain whitelist |
+| `permissions.py` | 2 | 92 | Tool approval system |
+| `memory.py` | 4 | 60 | Long-term memory tools |
+| `routing.py` | 4 | 67 | Agent-as-tool with depth limiting |
+| `session.py` | 4 | 98 | Session save/load |
+| `context.py` | 3 | 99 | Context window trimming |
+| `scaffold.py` | 4 | 50 | Agent folder scaffolding |
+| `display.py` | 1 | 66 | Rich console output |
+| `log.py` | 2 | 40 | Logging setup |
+| `trace.py` | 6 | 42 | Structured JSONL traces |
+| `cli.py` | 1 | 260 | Arg parsing, REPL, composition root |
+| `__main__.py` | 1 | 5 | Entry point |
+| `__init__.py` | 1 | 3 | Package exports |
+| **Total runtime** | | **~2,210** | |
+| **Total tests** | | **222** | 24 source files |
 
 ---
 
