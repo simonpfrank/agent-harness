@@ -47,15 +47,19 @@ def _to_anthropic_messages(
 
         if msg.role == "tool" and msg.tool_result is not None:
             tr = msg.tool_result
-            result.append({
-                "role": "user",
-                "content": [{
-                    "type": "tool_result",
-                    "tool_use_id": tr.tool_call_id,
-                    "content": tr.output if tr.output else (tr.error or ""),
-                    "is_error": tr.error is not None,
-                }],
-            })
+            tool_result_block: dict[str, Any] = {
+                "type": "tool_result",
+                "tool_use_id": tr.tool_call_id,
+                "content": tr.output if tr.output else (tr.error or ""),
+                "is_error": tr.error is not None,
+            }
+            # Merge consecutive tool results into one user message
+            if result and result[-1].get("role") == "user":
+                prev_content = result[-1].get("content", [])
+                if isinstance(prev_content, list) and prev_content and prev_content[0].get("type") == "tool_result":
+                    prev_content.append(tool_result_block)
+                    continue
+            result.append({"role": "user", "content": [tool_result_block]})
             continue
 
         if msg.role == "assistant" and msg.tool_calls:
@@ -72,6 +76,15 @@ def _to_anthropic_messages(
             result.append({"role": "assistant", "content": content})
             continue
 
+        # Merge consecutive same-role messages (Anthropic requires alternation)
+        if result and result[-1].get("role") == msg.role:
+            prev = result[-1]
+            prev_content = prev.get("content", "")
+            if isinstance(prev_content, str):
+                prev["content"] = prev_content + "\n" + (msg.content or "")
+            elif isinstance(prev_content, list):
+                prev_content.append({"type": "text", "text": msg.content or ""})
+            continue
         result.append({"role": msg.role, "content": msg.content or ""})
 
     return system, result

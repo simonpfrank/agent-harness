@@ -7,6 +7,7 @@ import re
 from collections.abc import Callable
 from typing import Any
 
+from agent_harness.loops.common import ensure_clean_state
 from agent_harness.loops.react import run as react_run
 from agent_harness.types import AgentConfig, LoopCallbacks, Message, Response
 
@@ -59,11 +60,12 @@ def run(
 
     for iteration in range(config.max_turns):
         # Generate — use react so tools work
-        last_output = react_run(chat_fn, messages, tool_schemas, config, callbacks)
+        react_run(chat_fn, messages, tool_schemas, config, callbacks)
+        last_output = ensure_clean_state(chat_fn, messages, tool_schemas, config)
 
-        # Evaluate — no tools, pure scoring
+        # Evaluate — pass tool_schemas so API accepts tool_use in history
         messages.append(Message(role="user", content=_EVAL_PROMPT))
-        eval_response = chat_fn(messages, [], model=config.model, **config.provider_kwargs)
+        eval_response = chat_fn(messages, tool_schemas, model=config.model, **config.provider_kwargs)
         messages.append(eval_response.message)
         if cb.on_budget and cb.on_budget(eval_response.usage):
             break
