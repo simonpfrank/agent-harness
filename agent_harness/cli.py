@@ -25,6 +25,7 @@ from agent_harness.permissions import Permissions
 from agent_harness.providers import registry as provider_registry
 from agent_harness.scaffold import create_agent
 from agent_harness.session import load_session, save_session
+from agent_harness.skills import load_skills
 from agent_harness.tools import execute_tool, generate_schema
 from agent_harness.tools import registry as tool_registry
 from agent_harness.trace import Tracer
@@ -78,7 +79,7 @@ def validate_config(config: AgentConfig) -> None:
 
 
 def _build_system_prompt(config: AgentConfig) -> str:
-    """Combine instructions and tools guidance into a system prompt.
+    """Combine instructions, tools guidance, and skills into a system prompt.
 
     Args:
         config: Agent configuration.
@@ -89,6 +90,9 @@ def _build_system_prompt(config: AgentConfig) -> str:
     prompt = config.instructions
     if config.tools_guidance:
         prompt += "\n\n" + config.tools_guidance
+    skills_content = load_skills("skills", f"{config.agent_dir}/skills")
+    if skills_content:
+        prompt += "\n\n" + skills_content
     return prompt
 
 
@@ -191,6 +195,7 @@ def _configure_tools(config: AgentConfig) -> None:
     tools_module.tool_timeout = config.tool_timeout
     tools_module.active_executor = config.executor
     memory_module.memory_dir = f"{config.agent_dir}/memory"
+    tools_module.discover_tools("tools")
 
 
 def _init_messages(config: AgentConfig, session_path: str | None) -> list[Message]:

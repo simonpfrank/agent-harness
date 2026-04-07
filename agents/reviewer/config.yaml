@@ -1,0 +1,7 @@
+name: reviewer
+provider: anthropic
+model: claude-haiku-4-5-20251001
+loop: eval_optimize
+tools: [run_command, read_file]
+max_turns: 3
+max_cost: 0.30

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import importlib.util
 import inspect
+import logging
 import shlex
 import subprocess
 import sys
@@ -182,6 +184,48 @@ registry: dict[str, Callable[..., str]] = {
     "run_agent": run_agent,
     "handoff_agent": handoff_agent,
 }
+
+
+_logger = logging.getLogger(__name__)
+
+_BUILTIN_NAMES = set(registry.keys())
+
+
+def discover_tools(tools_dir: str) -> None:
+    """Discover and register custom tools from a directory.
+
+    Each .py file should contain one public function with type annotations.
+    Built-in tools are never overwritten.
+
+    Args:
+        tools_dir: Path to directory containing tool .py files.
+    """
+    path = Path(tools_dir)
+    if not path.is_dir():
+        return
+    for py_file in sorted(path.glob("*.py")):
+        if py_file.name.startswith("_"):
+            continue
+        try:
+            spec = importlib.util.spec_from_file_location(py_file.stem, py_file)
+            if spec is None or spec.loader is None:
+                continue
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            for name, obj in inspect.getmembers(module, inspect.isfunction):
+                if name.startswith("_"):
+                    continue
+                hints = get_type_hints(obj)
+                if "return" not in hints:
+                    continue
+                if name in _BUILTIN_NAMES:
+                    _logger.warning("Custom tool '%s' skipped — would overwrite built-in", name)
+                    continue
+                registry[name] = obj
+                _logger.info("Registered custom tool: %s from %s", name, py_file.name)
+                break  # one function per file
+        except Exception as exc:
+            _logger.warning("Failed to load tool from %s: %s", py_file.name, exc)
 
 
 _DEFAULT_MAX_OUTPUT = 10_000

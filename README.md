@@ -175,28 +175,74 @@ max_cost: 0.10
 You are a helpful assistant. Be concise.
 ```
 
+## Custom Tools
+
+Add your own tools in the project-level `tools/` directory. One Python file per tool, one public function with type hints:
+
+```python
+# tools/word_count.py
+def word_count(text: str) -> str:
+    """Count the number of words in the given text.
+
+    Args:
+        text: The text to count words in.
+    """
+    return str(len(text.split()))
+```
+
+List the tool in your agent's config to make it available:
+
+```yaml
+tools: [run_command, read_file, word_count]
+```
+
+Custom tools are discovered at startup. Built-in tools cannot be overwritten.
+
+## Skills
+
+Skills are markdown files describing how to approach tasks. They're automatically loaded into the agent's system prompt.
+
+```
+skills/                          # Shared across all agents
+  csv-analysis/
+    SKILL.md                     # Loaded into prompt
+    scripts/
+      validate.py                # Agent invokes via tools
+agents/my-agent/
+  skills/                        # Agent-specific (overrides shared by name)
+    specialised-task/
+      SKILL.md
+```
+
+**Shared skills** in `skills/` are available to all agents. **Agent-local skills** in `{agent_dir}/skills/` override shared skills with the same directory name. No config needed — presence in the folder = active.
+
 ## Example Agents
 
-| Agent | What it does | Key tools |
-|-------|-------------|-----------|
-| `hello` | General assistant for trying things out | run_command, read_file, execute_code |
-| `csv-analyser` | Answers questions about CSV data deterministically | read_file, execute_code |
-| `code-reviewer` | Reviews git diffs with structured feedback | run_command, read_file |
-| `file-organiser` | Sorts files in a directory by content/type | run_command, read_file, execute_code |
-| `orchestrator` | Routes tasks to specialist agents | run_agent |
-| `hello-local` | Same as hello but uses LM Studio | run_command, read_file, execute_code |
+| Agent | Loop | What it does | Skills/Tools |
+|-------|------|-------------|-------------|
+| `hello` | react | General assistant | run_command, read_file, execute_code |
+| `analyst` | reflection | Data analysis with self-critique | csv-analysis skill |
+| `reviewer` | eval_optimize | Code review scored against rubric | code-review skill |
+| `persistent-coder` | ralph | Keeps trying until tests pass | run_command, execute_code |
+| `csv-analyser` | react | Quick CSV questions | read_file, execute_code |
+| `code-reviewer` | react | Git diff review | run_command, read_file |
+| `orchestrator` | react | Routes to specialist agents | run_agent |
+| `hello-local` | react | LM Studio / local model | run_command, read_file, execute_code |
 
 Try them:
 
 ```bash
-# Analyse a CSV file
-python -m agent_harness run ./agents/csv-analyser "What's the average value in data.csv?"
+# Data analysis with self-critique (reflection loop)
+python -m agent_harness run ./agents/analyst "Analyse sales.csv — what's the top product?"
 
-# Review recent changes
-python -m agent_harness run ./agents/code-reviewer "Review the last commit"
+# Code review with quality scoring (eval_optimize loop)
+python -m agent_harness run ./agents/reviewer "Review the last commit"
 
-# Route automatically
-python -m agent_harness run ./agents/orchestrator "Analyse sales.csv"
+# Persistent coding until tests pass (ralph loop)
+python -m agent_harness run ./agents/persistent-coder "Write a function that reverses a string"
+
+# Route to specialist automatically
+python -m agent_harness run ./agents/orchestrator "Analyse the CSV data in data/"
 ```
 
 ## Sessions and Memory
