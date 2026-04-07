@@ -6,16 +6,15 @@ from agent_harness.routing import handoff_agent, run_agent
 
 
 class TestRunAgent:
-    @patch("agent_harness.routing._run_sub_agent")
-    def test_returns_sub_agent_response(self, mock_run: MagicMock) -> None:
-        mock_run.return_value = "Sub-agent says hello"
+    @patch("agent_harness.routing._with_depth_check")
+    def test_returns_sub_agent_response(self, mock_depth: MagicMock) -> None:
+        mock_depth.return_value = "Sub-agent says hello"
         result = run_agent("hello", "say hi")
         assert result == "Sub-agent says hello"
-        mock_run.assert_called_once_with("hello", "say hi")
 
-    @patch("agent_harness.routing._run_sub_agent")
-    def test_missing_agent_returns_error(self, mock_run: MagicMock) -> None:
-        mock_run.side_effect = FileNotFoundError("Agent not found: nonexistent")
+    @patch("agent_harness.routing._with_depth_check")
+    def test_missing_agent_returns_error(self, mock_depth: MagicMock) -> None:
+        mock_depth.side_effect = FileNotFoundError("Agent not found: nonexistent")
         try:
             run_agent("nonexistent", "hello")
             raise AssertionError("Should have raised")
@@ -31,7 +30,7 @@ class TestCascadingDepthLimit:
     def test_depth_limit_exceeded(self) -> None:
         from agent_harness import routing as routing_module
         old_depth = routing_module._call_depth
-        routing_module._call_depth = 3  # already at max
+        routing_module._call_depth = 3
         try:
             run_agent("hello", "hi")
             raise AssertionError("Should have raised")
@@ -46,9 +45,9 @@ class TestCascadingDepthLimit:
 
 
 class TestHandoffAgent:
-    @patch("agent_harness.routing._handoff_sub_agent")
-    def test_passes_messages_through(self, mock_handoff: MagicMock) -> None:
-        mock_handoff.return_value = "continued conversation"
+    @patch("agent_harness.routing._load_and_run")
+    def test_passes_messages_through(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = "continued conversation"
         from agent_harness.types import Message
         msgs = [
             Message(role="system", content="sys"),
@@ -57,7 +56,7 @@ class TestHandoffAgent:
         ]
         result = handoff_agent("specialist", msgs)
         assert result == "continued conversation"
-        mock_handoff.assert_called_once_with("specialist", msgs)
+        mock_run.assert_called_once_with("specialist", msgs)
 
     def test_not_in_tool_registry(self) -> None:
         """handoff_agent takes list[Message] — not serialisable as LLM tool."""
