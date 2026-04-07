@@ -186,10 +186,11 @@ def _configure_tools(config: AgentConfig) -> None:
     Args:
         config: Agent configuration.
     """
+    from agent_harness import memory as memory_module
     from agent_harness import tools as tools_module
     tools_module.tool_timeout = config.tool_timeout
     tools_module.active_executor = config.executor
-    tools_module.memory_dir = f"{config.agent_dir}/memory"
+    memory_module.memory_dir = f"{config.agent_dir}/memory"
 
 
 def _init_messages(config: AgentConfig, session_path: str | None) -> list[Message]:
