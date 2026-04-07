@@ -110,6 +110,44 @@ Only the relevant experts run for each input. Different from orchestrator-worker
 
 **When to use:** Tasks with clearly distinct domains (legal vs technical vs financial). Reduces cost by only activating relevant experts.
 
+### 14. Parallelization (Fan-out / Fan-in)
+**Pattern:** Orchestrator splits task into independent subtasks → runs all concurrently → merges results.
+
+Different from orchestrator-worker where subtasks run sequentially. Here, independent subtasks execute simultaneously. A research task might search 5 sources in parallel then synthesise.
+
+**When to use:** Tasks with independent subtasks (searching multiple sources, processing multiple files). Requires async execution.
+
+### 15. Agentic RAG
+**Pattern:** Agent decides when to retrieve → searches knowledge base → evaluates relevance → re-queries if needed → generates answer grounded in retrieved context.
+
+Not just "search then answer" — the agent iteratively retrieves, evaluates, and refines queries until it has enough information. Combines ReAct with retrieval tools.
+
+**When to use:** Question answering over large document collections, fact-checking, research tasks where the agent needs to find and verify information.
+
+### 16. Deep Research
+**Pattern:** Search → Extract key information → Identify knowledge gaps → Follow-up searches → Synthesise comprehensive report.
+
+Multi-phase research with reflection between phases. The agent builds understanding iteratively, identifying what it doesn't know and searching specifically for that. Often produces a structured report with citations.
+
+**When to use:** Comprehensive research tasks, literature reviews, competitive analysis. Can be approximated with Plan-and-Execute + reflection.
+
+### 17. Consensus / Voting
+**Pattern:** Multiple agents independently solve the same problem → Compare results → Take majority answer or synthesise agreement.
+
+Improves reliability by getting multiple independent perspectives. If 3 out of 4 agents agree, confidence is high. Different from debate (where agents see each other's work) — here they work independently.
+
+**When to use:** High-stakes decisions, fact verification, any task where independent agreement increases confidence. Expensive (N times the LLM calls).
+
+---
+
+## Meta-Patterns (implemented as framework features, not loops)
+
+### Guardrails
+Deterministic safety checks before and after tool execution. Not an agent pattern per se — it's infrastructure that wraps any pattern. Our hooks system implements this.
+
+### Human-in-the-Loop
+User approval gates at key decision points. Our permissions system implements this. Can be combined with any pattern above.
+
 ---
 
 ## Sources
