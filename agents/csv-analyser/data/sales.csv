@@ -1,0 +1,19 @@
+date,product,region,units,price
+2026-01-05,Widget A,North,120,9.99
+2026-01-05,Widget B,South,85,14.50
+2026-01-05,Widget C,North,200,4.99
+2026-01-12,Widget A,South,95,9.99
+2026-01-12,Widget B,North,110,14.50
+2026-01-12,Widget C,East,180,4.99
+2026-01-19,Widget A,East,75,9.99
+2026-01-19,Widget B,South,130,14.50
+2026-01-19,Widget C,North,220,4.99
+2026-01-26,Widget A,North,140,9.99
+2026-01-26,Widget B,East,90,14.50
+2026-01-26,Widget C,South,160,4.99
+2026-02-02,Widget A,South,110,9.99
+2026-02-02,Widget B,North,105,14.50
+2026-02-02,Widget C,East,195,4.99
+2026-02-09,Widget A,East,88,9.99
+2026-02-09,Widget B,South,115,14.50
+2026-02-09,Widget C,North,210,4.99

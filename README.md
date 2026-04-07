@@ -218,32 +218,34 @@ agents/my-agent/
 
 ## Example Agents
 
-| Agent | Loop | What it does | Skills/Tools |
-|-------|------|-------------|-------------|
-| `hello` | react | General assistant | run_command, read_file, execute_code |
-| `analyst` | reflection | Data analysis with self-critique | csv-analysis skill |
-| `reviewer` | eval_optimize | Code review scored against rubric | code-review skill |
-| `persistent-coder` | ralph | Keeps trying until tests pass | run_command, execute_code |
-| `csv-analyser` | react | Quick CSV questions | read_file, execute_code |
-| `code-reviewer` | react | Git diff review | run_command, read_file |
-| `orchestrator` | react | Routes to specialist agents | run_agent |
-| `hello-local` | react | LM Studio / local model | run_command, read_file, execute_code |
-
-Try them:
+| Agent | Loop | What it does |
+|-------|------|-------------|
+| `hello` | react | General assistant — tools, code execution, the strawberry test |
+| `csv-analyser` | react | Analyses the included sales.csv dataset with pandas |
+| `analyst` | reflection | Data analysis with self-critique and refinement |
+| `reviewer` | eval_optimize | Code review scored against a quality rubric |
+| `persistent-coder` | ralph | Writes code, retries with fresh context until tests pass |
+| `orchestrator` | react | Routes tasks to specialist agents |
+| `hello-local` | react | Same as hello but uses LM Studio |
 
 ```bash
-# Data analysis with self-critique (reflection loop)
-python -m agent_harness run ./agents/analyst "Analyse sales.csv — what's the top product?"
+# Count letters with code (the strawberry test)
+.venv/bin/python -m agent_harness run ./agents/hello "How many r's in strawberry?"
 
-# Code review with quality scoring (eval_optimize loop)
-python -m agent_harness run ./agents/reviewer "Review the last commit"
+# Analyse real data
+.venv/bin/python -m agent_harness run ./agents/csv-analyser "What's the total revenue?"
 
-# Persistent coding until tests pass (ralph loop)
-python -m agent_harness run ./agents/persistent-coder "Write a function that reverses a string"
+# Self-critiquing analysis
+.venv/bin/python -m agent_harness run ./agents/analyst "How many Python files in agent_harness?"
 
-# Route to specialist automatically
-python -m agent_harness run ./agents/orchestrator "Analyse the CSV data in data/"
+# Code review with scoring
+.venv/bin/python -m agent_harness run ./agents/reviewer "Review the last commit"
+
+# Persistent coding
+.venv/bin/python -m agent_harness run ./agents/persistent-coder "Write is_palindrome(s). Test it. Say DONE."
 ```
+
+See `example_runs.md` for the full set of example commands.
 
 ## Sessions and Memory
 
