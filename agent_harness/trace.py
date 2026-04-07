@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -40,7 +41,8 @@ class Tracer:
             **data,
         }
         try:
+            self._file.parent.mkdir(parents=True, exist_ok=True)
             with open(self._file, "a") as f:
                 f.write(json.dumps(entry) + "\n")
-        except OSError:
-            pass  # Tracing is best-effort — don't crash the agent
+        except OSError as exc:
+            logging.getLogger(__name__).warning("Trace write failed: %s", exc)

@@ -78,8 +78,10 @@ class Permissions:
         if not self._persist_path:
             return
         try:
+            persist = Path(self._persist_path)
+            persist.parent.mkdir(parents=True, exist_ok=True)
             all_approved = sorted(self._session_approved | self._persistent_approved)
-            Path(self._persist_path).write_text(yaml.dump({"approved": all_approved}))
+            persist.write_text(yaml.dump({"approved": all_approved}))
         except OSError:
             logger.warning("Could not save permissions to %s", self._persist_path)
 
