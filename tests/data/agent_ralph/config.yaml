@@ -1,0 +1,7 @@
+name: test-ralph
+provider: anthropic
+model: claude-haiku-4-5-20251001
+loop: ralph
+tools: [run_command, read_file, execute_code]
+max_turns: 5
+max_cost: 0.05
