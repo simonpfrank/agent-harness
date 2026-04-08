@@ -142,7 +142,7 @@ class TestRealLLMIntegration:
 class TestOpenAIIntegration:
     def test_single_turn_simple_question(self) -> None:
         """OpenAI answers a simple question without tool use."""
-        cfg = load("agents/hello-openai")
+        cfg = load("tests/data/agent_openai")
         chat_fn = provider_registry[cfg.provider]
         schemas = [generate_schema(tool_registry[t]) for t in cfg.tools]
 
@@ -155,13 +155,13 @@ class TestOpenAIIntegration:
 
     def test_tool_use_list_files(self) -> None:
         """OpenAI uses run_command to list files."""
-        cfg = load("agents/hello-openai")
+        cfg = load("tests/data/agent_openai")
         chat_fn = provider_registry[cfg.provider]
         schemas = [generate_schema(tool_registry[t]) for t in cfg.tools]
 
         messages = [
             Message(role="system", content=cfg.instructions),
-            Message(role="user", content="List the files in the agents/hello-openai directory."),
+            Message(role="user", content="List the files in the tests/data/agent_openai directory."),
         ]
         cb = LoopCallbacks(on_tool_call=execute_tool)
         result = run(chat_fn, messages, schemas, cfg, callbacks=cb)
@@ -169,13 +169,13 @@ class TestOpenAIIntegration:
 
     def test_tool_use_read_file(self) -> None:
         """OpenAI uses read_file and reports contents."""
-        cfg = load("agents/hello-openai")
+        cfg = load("tests/data/agent_openai")
         chat_fn = provider_registry[cfg.provider]
         schemas = [generate_schema(tool_registry[t]) for t in cfg.tools]
 
         messages = [
             Message(role="system", content=cfg.instructions),
-            Message(role="user", content="Read agents/hello-openai/config.yaml and tell me the provider name."),
+            Message(role="user", content="Read tests/data/agent_openai/config.yaml and tell me the provider name."),
         ]
         cb = LoopCallbacks(on_tool_call=execute_tool)
         result = run(chat_fn, messages, schemas, cfg, callbacks=cb)
