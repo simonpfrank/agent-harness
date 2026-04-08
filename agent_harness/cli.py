@@ -52,6 +52,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     run_parser.add_argument("prompt", nargs="?", default=None, help="Single prompt")
     run_parser.add_argument("--session", default=None, help="Session name to save/resume")
     run_parser.add_argument("--verbose", action="store_true", help="Verbose output")
+    run_parser.add_argument("--provider", default=None, help="Override provider")
+    run_parser.add_argument("--model", default=None, help="Override model")
+    run_parser.add_argument("--loop", default=None, help="Override loop pattern")
+    run_parser.add_argument("--max-turns", type=int, default=None, help="Override max turns")
+    run_parser.add_argument("--max-cost", type=float, default=None, help="Override max cost")
+    run_parser.add_argument("--executor", default=None, help="Override code executor")
+    run_parser.add_argument("--tool-timeout", type=int, default=None, help="Override tool timeout")
+    run_parser.add_argument("--max-output-chars", type=int, default=None, help="Override max output chars")
 
     init_parser = sub.add_parser("init", help="Create a new agent")
     init_parser.add_argument("name", help="Agent name")
@@ -244,11 +252,28 @@ def _init_messages(config: AgentConfig, session_path: str | None) -> list[Messag
     return messages
 
 
+def _apply_overrides(config: AgentConfig, overrides: dict[str, object]) -> AgentConfig:
+    """Apply CLI overrides to a loaded config.
+
+    Args:
+        config: Loaded agent configuration.
+        overrides: Dict of field_name → value. None values are skipped.
+
+    Returns:
+        Config with overrides applied.
+    """
+    for key, value in overrides.items():
+        if value is not None and hasattr(config, key):
+            object.__setattr__(config, key, value)
+    return config
+
+
 def run_agent(
     agent_dir: str,
     prompt: str | None = None,
     session: str | None = None,
     verbose: bool = False,
+    overrides: dict[str, object] | None = None,
 ) -> None:
     """Load config and run the agent loop.
 
@@ -257,9 +282,12 @@ def run_agent(
         prompt: Single prompt (None for REPL mode).
         session: Session name to save/resume.
         verbose: Enable verbose output.
+        overrides: CLI config overrides (field_name → value).
     """
     try:
         config = config_loader.load(agent_dir)
+        if overrides:
+            _apply_overrides(config, overrides)
         validate_config(config)
     except (FileNotFoundError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
@@ -309,7 +337,17 @@ def main() -> None:
     load_dotenv()
     args = parse_args()
     if args.command == "run":
-        run_agent(args.agent_dir, prompt=args.prompt, session=args.session, verbose=args.verbose)
+        overrides = {
+            "provider": args.provider,
+            "model": args.model,
+            "loop": args.loop,
+            "max_turns": args.max_turns,
+            "max_cost": args.max_cost,
+            "executor": args.executor,
+            "tool_timeout": args.tool_timeout,
+            "max_output_chars": args.max_output_chars,
+        }
+        run_agent(args.agent_dir, prompt=args.prompt, session=args.session, verbose=args.verbose, overrides=overrides)
     elif args.command == "init":
         agent_dir = f"agents/{args.name}"
         create_agent(agent_dir)

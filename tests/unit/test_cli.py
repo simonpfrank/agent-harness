@@ -23,6 +23,41 @@ class TestParseArgs:
         args = parse_args(["run", "./agents/hello", "--verbose"])
         assert args.verbose is True
 
+    def test_model_override(self) -> None:
+        args = parse_args(["run", "./agents/hello", "--model", "gpt-4o-mini"])
+        assert args.model == "gpt-4o-mini"
+
+    def test_provider_override(self) -> None:
+        args = parse_args(["run", "./agents/hello", "--provider", "openai"])
+        assert args.provider == "openai"
+
+    def test_max_turns_override(self) -> None:
+        args = parse_args(["run", "./agents/hello", "--max-turns", "3"])
+        assert args.max_turns == 3
+
+    def test_max_cost_override(self) -> None:
+        args = parse_args(["run", "./agents/hello", "--max-cost", "0.02"])
+        assert args.max_cost == 0.02
+
+    def test_loop_override(self) -> None:
+        args = parse_args(["run", "./agents/hello", "--loop", "reflection"])
+        assert args.loop == "reflection"
+
+    def test_no_overrides_default_none(self) -> None:
+        args = parse_args(["run", "./agents/hello"])
+        assert args.model is None
+        assert args.provider is None
+        assert args.max_turns is None
+
+    def test_multiple_overrides(self) -> None:
+        args = parse_args([
+            "run", "./agents/hello",
+            "--provider", "openai", "--model", "gpt-4o-mini", "--max-turns", "3",
+        ])
+        assert args.provider == "openai"
+        assert args.model == "gpt-4o-mini"
+        assert args.max_turns == 3
+
     def test_run_requires_agent_dir(self) -> None:
         with pytest.raises(SystemExit):
             parse_args(["run"])
