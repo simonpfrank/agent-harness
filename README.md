@@ -1,6 +1,6 @@
 # Agent Harness
 
-Minimal agent framework — agents as markdown folders and possible scripts. Inspired by Skills and things like OpenClaw. Intended to make it easy to create and run agents quickly.
+Minimal agent framework — agents as markdown folders and possible scripts. Inspired by Skills and things like OpenClaw. Intended to make it easy to create and run agents quickly. This is probably alpha quality at this stage, but all tests pass and many agent types are run in integration tests. Most docs are AI written and iterated all code is AI written and not yet reviewed.
 
 As a summary, be able to run an agent in a cli, and if it needs more inputs just using a simple input() ui. Define it in markdown, add skills, add tools, add a different provider if not there etc. The approach is deliberately simple with as flat an architecture as possible to make it easy to modify and keep code as low as practical.
 
