@@ -638,6 +638,22 @@ Instead of injecting all tool schemas into every prompt, send a compact list (na
 
 Optional `identity.md` file in agent folder — prepended before `instructions.md`. Separates "who you are" from "what you do". Useful for agents that share an identity but have different procedures. ~5 lines in config.py. Inspired by OpenClaw's SOUL.md/AGENTS.md split.
 
+### Phase 15 — Immutable Trace with Hash Chain
+
+Add hash chaining to trace events — each entry includes the hash of the previous entry. Makes traces tamper-evident without requiring a database. ~10 lines in trace.py. Inspired by Paperclip's append-only audit log.
+
+### Phase 16 — Per-Task Cost Attribution
+
+Add `task_id` to trace events and budget.record(). Enables summing cost by task for reporting. ~10 lines. Inspired by Paperclip's granular cost tracking.
+
+### Considering — Decision-Level Approval Gates
+
+Beyond per-tool permissions, approve by decision severity. Could work as a `before_decision` hook that checks decision type (e.g. "this agent wants to delegate to another agent" vs "this agent wants to read a file"). Worth exploring if multi-agent orchestration becomes a primary use case. Inspired by Paperclip's governance model.
+
+### Considering — Shared Workspace Communication
+
+A `workspace/` directory convention for multi-agent file-based coordination. Agents read/write shared files instead of fire-and-forget `run_agent` calls. Enables richer collaboration without framework changes — just a directory and instructions.md guidance. Inspired by Paperclip's shared workspace.
+
 ### Implemented Loop Patterns
 
 All implemented. See `docs/agentic-design-patterns.md` for diagrams.
