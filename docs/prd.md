@@ -131,6 +131,7 @@ These apply across every feature and decision:
 ### FR9: CLI and REPL
 - **Single command mode**: `python -m agent_harness run <agent_folder> "prompt"` — run once, return result
 - **Interactive REPL**: `python -m agent_harness run <agent_folder>` — conversational mode
+- **Config overrides**: Named CLI args override any config.yaml field at runtime — `--provider`, `--model`, `--loop`, `--max-turns`, `--max-cost`, `--executor`, `--tool-timeout`, `--max-output-chars`. No file editing needed for experimentation.
 - Start with basic `input()` + Rich formatting
 - Graduate to cli-repl-kit integration for polished experience (tab completion, key bindings, etc.)
 - The agent doesn't care what calls it — `agent.run(message) -> str` works for REPL, CLI, tests, and future API

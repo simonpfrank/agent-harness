@@ -32,6 +32,13 @@ Interactive REPL (no prompt argument):
 python -m agent_harness run ./agents/hello
 ```
 
+Override any config setting without editing the file:
+
+```bash
+python -m agent_harness run ./agents/hello "hi" --provider openai --model gpt-4o-mini
+python -m agent_harness run ./agents/analyst "count files" --loop react --max-turns 3
+```
+
 ## How It Works
 
 An agent is a folder containing:

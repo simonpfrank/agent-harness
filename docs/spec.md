@@ -517,9 +517,10 @@ Each is a folder with `instructions.md`, `config.yaml`, and optionally `tools.md
 | File | Phase | Lines | Purpose |
 |------|-------|-------|---------|
 | `types.py` | 1 | 92 | Shared dataclasses and type aliases |
-| `tools.py` | 1 | 269 | Registry, schema generation, core tools, executor |
-| `providers/anthropic.py` | 1 | 194 | Claude provider with retry |
-| `providers/openai_provider.py` | 1+ | 199 | OpenAI/LM Studio provider with retry |
+| `tools.py` | 1 | 269 | Registry, schema generation, core tools, executor, discovery |
+| `providers/anthropic.py` | 1 | 183 | Claude provider |
+| `providers/openai_provider.py` | 1+ | 188 | OpenAI/LM Studio provider |
+| `providers/retry.py` | — | 62 | Shared retry with backoff for all providers |
 | `loops/react.py` | 1 | 68 | ReAct loop with context trimming |
 | `loops/plan_execute.py` | 3 | 89 | Plan-then-execute loop |
 | `loops/rewoo.py` | — | 75 | ReWOO loop |
@@ -542,10 +543,10 @@ Each is a folder with `instructions.md`, `config.yaml`, and optionally `tools.md
 | `display.py` | 1 | 66 | Rich console output |
 | `log.py` | 2 | 40 | Logging setup |
 | `trace.py` | 6 | 46 | Structured JSONL traces |
-| `cli.py` | 1 | 318 | Arg parsing, REPL, composition root |
+| `cli.py` | 1 | 356 | Arg parsing, REPL, config overrides, composition root |
 | `__main__.py` | 1 | 5 | Entry point |
 | `__init__.py` | 1 | 3 | Package exports |
-| **Total runtime** | | **~2,910** | 31 source files |
+| **Total runtime** | | **~2,980** | 33 source files |
 | **Total tests** | | **273** | |
 
 ---
