@@ -1,9 +1,31 @@
 # Agent Harness
 
-Minimal agent framework — agents as markdown folders.
+Minimal agent framework — agents as markdown folders and possible scripts. Inspired by Skills and things like OpenClaw. Intended to make it easy to create and run agents quickly.
+
+As a summary, be able to run an agent in a cli, and if it needs more inputs just using a simple input() ui. Define it in markdown, add skills, add tools, add a different provider if not there etc. The approach is deliberately simple with as flat an architecture as possible to make it easy to modify and keep code as low as practical.
+
+### Features
+
+- **Agent = folder** — `instructions.md` + `config.yaml` + optional `tools.md`. Copy it, share it, version it.
+- **7 loop patterns** — ReAct, Plan-and-Execute, ReWOO, Reflection, Evaluator-Optimizer, Ralph Wiggum, Debate
+- **2 providers** — Anthropic (Claude) and OpenAI/LM Studio, with shared retry logic. Add your own in one file.
+- **5 safety hooks on by default** — dangerous command blocking, path traversal, network exfiltration, injection scanning, secrets redaction
+- **Custom tools** — drop a Python file in `tools/`, list it in config, done
+- **Skills** — markdown knowledge files loaded into agent context automatically (shared and agent-local)
+- **Sessions** — save/resume conversations across restarts
+- **Memory** — agents decide what to remember via `save_memory`/`recall_memory` tools
+- **Agent routing** — agents delegate to other agents via `run_agent` tool with independent budgets
+- **CLI config overrides** — `--provider`, `--model`, `--loop`, `--max-turns` etc. without editing files
+- **Structured traces** — JSONL files with full conversation replay (prompts, responses, tool I/O)
+- **Budget enforcement** — turn limits and cost ceilings, deterministic (never exceeded)
+- **Pluggable executor** — swap subprocess for Docker or any other sandbox
+- **Context window management** — automatic trimming when approaching model limits
+- **Scaffold command** — `agent-harness init my-agent` creates a ready-to-run agent
+
+See `docs/prd.md`, `docs/architecture.md` and `docs/spec.md` for full details.
 
 ## Quick Start
-
+Clone the repo.
 ```bash
 python -m venv .venv
 source .venv/bin/activate
@@ -74,7 +96,7 @@ cli.py (composition root)
 
 **This section is important. Read it before running agents unsupervised.**
 
-Agent Harness includes five built-in safety hooks that filter tool calls and scan output. Three are on by default. Understanding what they do and don't do is your responsibility.
+Agent Harness includes five built-in safety hooks that filter tool calls and scan output. Three are on by default. Understanding what they do and don't do and adding more is your responsibility.
 
 ### Default-on hooks (active with zero config)
 
@@ -295,7 +317,7 @@ Both providers retry transient errors (rate limits, server errors) with exponent
 
 ## Code Execution
 
-`execute_code` delegates to a pluggable executor. The default is `subprocess` (runs code directly on your machine).
+`execute_code` delegates to a pluggable executor. The default is `subprocess` (runs code directly on your machine). A docker version or a.n. other method of sandboxing can easily be added to tools and hooks can be enhanced/added to prevent malicious code.
 
 ```yaml
 # config.yaml — default, runs locally
