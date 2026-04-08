@@ -124,7 +124,7 @@ class TestChat:
         mock_client.messages.create.assert_called_once()
 
     @patch("agent_harness.providers.anthropic._get_client")
-    @patch("agent_harness.providers.anthropic.time.sleep")
+    @patch("agent_harness.providers.retry.time.sleep")
     def test_retries_on_rate_limit(self, mock_sleep: MagicMock, mock_get_client: MagicMock) -> None:
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
@@ -167,7 +167,7 @@ class TestChat:
         assert mock_client.messages.create.call_count == 1
 
     @patch("agent_harness.providers.anthropic._get_client")
-    @patch("agent_harness.providers.anthropic.time.sleep")
+    @patch("agent_harness.providers.retry.time.sleep")
     def test_max_retries_exceeded(self, mock_sleep: MagicMock, mock_get_client: MagicMock) -> None:
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client

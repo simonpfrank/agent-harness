@@ -3,18 +3,12 @@
 from __future__ import annotations
 
 import json
-import logging
-import time
 from typing import Any
 
 import openai
 
+from agent_harness.providers.retry import with_retry
 from agent_harness.types import Message, Response, ToolCall, Usage
-
-logger = logging.getLogger(__name__)
-
-_MAX_RETRIES = 3
-_BACKOFF_SECONDS = [1, 2, 4]
 
 _clients: dict[str, openai.OpenAI] = {}
 
@@ -179,21 +173,15 @@ def chat(
         base_url=kwargs.get("base_url"),
         api_key=kwargs.get("api_key"),
     )
-    for attempt in range(_MAX_RETRIES):
-        try:
-            api_response = client.chat.completions.create(**create_kwargs)
-            return _to_response(api_response)
-        except openai.AuthenticationError:
-            raise RuntimeError(
-                "OpenAI API key invalid or not set — export OPENAI_API_KEY"
-            ) from None
-        except openai.BadRequestError:
-            raise
-        except openai.APIError as exc:
-            if attempt < _MAX_RETRIES - 1:
-                delay = _BACKOFF_SECONDS[attempt]
-                logger.warning("OpenAI API error (attempt %d): %s — retrying in %ds", attempt + 1, exc, delay)
-                time.sleep(delay)
-            else:
-                raise RuntimeError(f"OpenAI API failed after {_MAX_RETRIES} attempts: {exc}") from exc
-    raise RuntimeError(f"OpenAI API failed after {_MAX_RETRIES} attempts")  # pragma: no cover
+    def _call() -> Response:
+        return _to_response(client.chat.completions.create(**create_kwargs))
+
+    result: Response = with_retry(
+        _call,
+        auth_error=openai.AuthenticationError,
+        bad_request_error=openai.BadRequestError,
+        api_error=openai.APIError,
+        provider_name="OpenAI",
+        env_var="OPENAI_API_KEY",
+    )
+    return result

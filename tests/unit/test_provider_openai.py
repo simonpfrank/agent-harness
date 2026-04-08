@@ -173,7 +173,7 @@ class TestChat:
         mock_client.chat.completions.create.assert_called_once()
 
     @patch("agent_harness.providers.openai_provider._get_client")
-    @patch("agent_harness.providers.openai_provider.time.sleep")
+    @patch("agent_harness.providers.retry.time.sleep")
     def test_retries_on_rate_limit(self, mock_sleep: MagicMock, mock_get_client: MagicMock) -> None:
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
