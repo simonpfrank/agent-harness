@@ -133,14 +133,27 @@ Contingency ~$6 for re-runs, tooling iteration, stacking experiments.
 
 ### Results
 
-*Populate as runs complete. One row per (config × model) cell.*
+One row per (config × model) cell. Raw per-run rows in `docs/experiment_results.csv`.
 
-| Config | Model | N | mean_correct | stdev | false_positives | $/run | turns | Notes |
+| Config | Model | N | mean | stdev | mean_fp | $/run | turns | Notes |
 |---|---|---|---|---|---|---|---|---|
-| H0 | gpt-4o-mini | — | — | — | — | — | — | — |
-| H4 | gpt-4o-mini | — | — | — | — | — | — | — |
-| H0 | haiku-4-5 | — | — | — | — | — | — | — |
-| … | | | | | | | | |
+| H0 | gpt-4o-mini | 5 | 5.80 | 0.84 | 0.2 | $0.005 | 3.4 | Range 5–7 |
+| H4 | gpt-4o-mini | 5 | 6.80 | 0.45 | 0.2 | $0.005 | 3.6 | temp=0; +1 mean, half stdev vs H0 |
+| H0 | haiku-4-5 | 5 | 7.20 | 0.45 | 2.6 | $0.076 | 5.2 | One 12-FP runaway in run 3 |
+| H4 | haiku-4-5 | 5 | 7.20 | 0.45 | 0.8 | $0.063 | 5.0 | temp=0 reduced FP spread, no accuracy change |
+| H1 | gpt-4o-mini | 5 | 5.00 | 0.00 | 1.0 | $0.009 | 5.2 | value_overlap tool; mini treats tool output as the definitive match list and drops name/semantic matches |
+| H1 | haiku-4-5 | 5 | **9.00** | **0.00** | 1.8 | $0.091 | 7.0 | value_overlap tool; **breakthrough**: +1.8 vs H4 with zero variance |
+
+**Mid-round interpretation:**
+- **H1 on Haiku is the current winner**: 9/11 consistently, zero variance, $0.09/run.
+- H1 *hurts* mini — the small model cannot follow "tool gives priors AND continue to match by name". Capability, not prompt.
+- Two persistent failure modes remain on Haiku H1:
+  - *Secondary Gender* (0% populated) — value_overlap cannot help by construction.
+  - *Form of Annuity* — an ambiguity: two input columns share 3 values. Haiku picks "Original Form of Annuity at Commencement" over "Form of Annuity to Be Purchased" every time. This is a disambiguation problem.
+- Spend after H1: **$1.56 / $10**.
+
+**Harness bug found and fixed:**
+`max_output_chars` (default 10000) was truncating `profile_data` output under the original design where value_overlap received the profile JSON as a tool argument — the model then hallucinated a compressed profile when re-emitting it. Also redesigned value_overlap to read files directly instead of receiving JSON, making it ~3× cheaper and self-contained. Earlier H0/H4 runs were unaffected by the truncation because they didn't need to re-emit the profile.
 
 ### Findings
 

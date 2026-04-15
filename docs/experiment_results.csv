@@ -1,0 +1,54 @@
+config,provider,model,run,correct,false_positives,cost,turns,error
+H0,openai,gpt-4o-mini,1,7,0,0.0061,4,
+H0,openai,gpt-4o-mini,2,6,0,0.0077,4,
+H0,openai,gpt-4o-mini,3,5,1,0.004,3,
+H0,openai,gpt-4o-mini,4,5,0,0.004,3,
+H0,openai,gpt-4o-mini,5,6,0,0.0042,3,
+H4,openai,gpt-4o-mini,1,7,0,0.0043,3,
+H4,openai,gpt-4o-mini,2,7,0,0.0063,4,
+H4,openai,gpt-4o-mini,3,7,0,0.0062,4,
+H4,openai,gpt-4o-mini,4,6,1,0.0061,4,
+H4,openai,gpt-4o-mini,5,7,0,0.0043,3,
+H0,anthropic,claude-haiku-4-5-20251001,1,7,0,0.0736,5,
+H0,anthropic,claude-haiku-4-5-20251001,2,8,1,0.0581,5,
+H0,anthropic,claude-haiku-4-5-20251001,3,7,12,0.0857,6,
+H0,anthropic,claude-haiku-4-5-20251001,4,7,0,0.1006,6,
+H0,anthropic,claude-haiku-4-5-20251001,5,7,0,0.0603,4,
+H4,anthropic,claude-haiku-4-5-20251001,1,7,0,0.0603,5,
+H4,anthropic,claude-haiku-4-5-20251001,2,7,0,0.0622,5,
+H4,anthropic,claude-haiku-4-5-20251001,3,7,1,0.0676,5,
+H4,anthropic,claude-haiku-4-5-20251001,4,8,2,0.0602,5,
+H4,anthropic,claude-haiku-4-5-20251001,5,7,1,0.0649,5,
+H1,openai,gpt-4o-mini,1,2,0,0.0117,5,
+H1,openai,gpt-4o-mini,2,2,0,0.0104,5,
+H1,openai,gpt-4o-mini,3,2,0,0.0117,5,
+H1,openai,gpt-4o-mini,4,2,0,0.0102,5,
+H1,openai,gpt-4o-mini,5,2,0,0.0103,5,
+H1,openai,gpt-4o-mini,1,5,1,0.0104,4,
+H1,openai,gpt-4o-mini,2,5,1,0.0136,5,
+H1,openai,gpt-4o-mini,3,5,1,0.0136,5,
+H1,openai,gpt-4o-mini,4,5,1,0.0136,5,
+H1,openai,gpt-4o-mini,5,5,1,0.0128,5,
+H1,openai,gpt-4o-mini,1,5,1,0.0181,6,
+H1,openai,gpt-4o-mini,2,5,1,0.0137,5,
+H1,openai,gpt-4o-mini,3,3,0,0.009,4,
+H1,openai,gpt-4o-mini,1,0,0,0.0,0,"No output file. Exit 1. stderr head: Error: Unknown tool: value_overlap
+"
+H1,openai,gpt-4o-mini,2,0,0,0.0,0,"No output file. Exit 1. stderr head: Error: Unknown tool: value_overlap
+"
+H1,openai,gpt-4o-mini,3,0,0,0.0,0,"No output file. Exit 1. stderr head: Error: Unknown tool: value_overlap
+"
+H1,openai,gpt-4o-mini,4,0,0,0.0,0,"No output file. Exit 1. stderr head: Error: Unknown tool: value_overlap
+"
+H1,openai,gpt-4o-mini,5,0,0,0.0,0,"No output file. Exit 1. stderr head: Error: Unknown tool: value_overlap
+"
+H1,openai,gpt-4o-mini,1,5,1,0.01,6,
+H1,openai,gpt-4o-mini,2,5,1,0.01,6,
+H1,openai,gpt-4o-mini,3,5,1,0.0075,5,
+H1,openai,gpt-4o-mini,4,5,1,0.0079,5,
+H1,openai,gpt-4o-mini,5,5,1,0.0072,5,
+H1,anthropic,claude-haiku-4-5-20251001,1,9,2,0.0906,7,
+H1,anthropic,claude-haiku-4-5-20251001,2,9,2,0.0956,7,
+H1,anthropic,claude-haiku-4-5-20251001,3,9,1,0.0881,7,
+H1,anthropic,claude-haiku-4-5-20251001,4,9,2,0.0926,7,
+H1,anthropic,claude-haiku-4-5-20251001,5,9,2,0.0905,7,

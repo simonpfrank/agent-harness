@@ -1,0 +1,10 @@
+name: column-matcher
+provider: anthropic
+model: claude-haiku-4-5-20251001
+loop: react
+tools: [read_file, write_file, list_directory, execute_code, profile_data, value_overlap, save_memory, recall_memory, list_memories]
+max_turns: 10
+max_cost: 0.30
+max_output_chars: 40000
+provider_kwargs:
+  max_tokens: 8192
