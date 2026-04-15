@@ -60,6 +60,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     run_parser.add_argument("--executor", default=None, help="Override code executor")
     run_parser.add_argument("--tool-timeout", type=int, default=None, help="Override tool timeout")
     run_parser.add_argument("--max-output-chars", type=int, default=None, help="Override max output chars")
+    run_parser.add_argument("--temperature", type=float, default=None, help="Override sampling temperature")
 
     init_parser = sub.add_parser("init", help="Create a new agent")
     init_parser.add_argument("name", help="Agent name")
@@ -263,7 +264,11 @@ def _apply_overrides(config: AgentConfig, overrides: dict[str, object]) -> Agent
         Config with overrides applied.
     """
     for key, value in overrides.items():
-        if value is not None and hasattr(config, key):
+        if value is None:
+            continue
+        if key == "temperature":
+            config.provider_kwargs["temperature"] = value
+        elif hasattr(config, key):
             object.__setattr__(config, key, value)
     return config
 
@@ -288,13 +293,13 @@ def run_agent(
         config = config_loader.load(agent_dir)
         if overrides:
             _apply_overrides(config, overrides)
+        _configure_tools(config)
         validate_config(config)
     except (FileNotFoundError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 
     setup_logging(agent_dir=config.agent_dir, verbose=verbose)
-    _configure_tools(config)
 
     chat_fn = provider_registry[config.provider]
     loop_fn = loop_registry[config.loop]
@@ -346,6 +351,7 @@ def main() -> None:
             "executor": args.executor,
             "tool_timeout": args.tool_timeout,
             "max_output_chars": args.max_output_chars,
+            "temperature": args.temperature,
         }
         run_agent(args.agent_dir, prompt=args.prompt, session=args.session, verbose=args.verbose, overrides=overrides)
     elif args.command == "init":

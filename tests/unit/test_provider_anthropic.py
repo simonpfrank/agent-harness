@@ -124,6 +124,29 @@ class TestChat:
         mock_client.messages.create.assert_called_once()
 
     @patch("agent_harness.providers.anthropic._get_client")
+    def test_passes_temperature(self, mock_get_client: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        text_block = MagicMock(type="text", text="ok")
+        mock_response = MagicMock()
+        mock_response.content = [text_block]
+        mock_response.usage.input_tokens = 1
+        mock_response.usage.output_tokens = 1
+        mock_response.stop_reason = "end_turn"
+        mock_client.messages.create.return_value = mock_response
+
+        chat(
+            [Message(role="user", content="hi")],
+            tools=[],
+            model="claude-haiku-4-5-20251001",
+            temperature=0.0,
+            top_p=0.3,
+        )
+        call_kwargs = mock_client.messages.create.call_args.kwargs
+        assert call_kwargs["temperature"] == 0.0
+        assert call_kwargs["top_p"] == 0.3
+
+    @patch("agent_harness.providers.anthropic._get_client")
     @patch("agent_harness.providers.retry.time.sleep")
     def test_retries_on_rate_limit(self, mock_sleep: MagicMock, mock_get_client: MagicMock) -> None:
         mock_client = MagicMock()

@@ -166,6 +166,9 @@ def chat(
         "model": model,
         "messages": api_messages,
     }
+    for key in ("temperature", "max_tokens", "top_p"):
+        if key in kwargs:
+            create_kwargs[key] = kwargs[key]
     if api_tools:
         create_kwargs["tools"] = api_tools
 

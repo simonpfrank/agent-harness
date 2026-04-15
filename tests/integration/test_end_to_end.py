@@ -62,6 +62,36 @@ class TestConfigAndToolsIntegration:
         assert result.output is None
 
 
+class TestProviderKwargsPassthrough:
+    @requires_anthropic_key
+    def test_anthropic_accepts_temperature(self) -> None:
+        """Passing temperature=0.0 to Anthropic must not raise."""
+        from agent_harness.providers.anthropic import chat
+
+        result = chat(
+            [Message(role="user", content="Reply with just the word ok.")],
+            tools=[],
+            model="claude-haiku-4-5-20251001",
+            temperature=0.0,
+            max_tokens=50,
+        )
+        assert result.message.content is not None
+
+    @requires_openai_key
+    def test_openai_accepts_temperature_and_max_tokens(self) -> None:
+        """Passing temperature=0.0 and max_tokens to OpenAI must not raise."""
+        from agent_harness.providers.openai_provider import chat
+
+        result = chat(
+            [Message(role="user", content="Reply with just the word ok.")],
+            tools=[],
+            model="gpt-4o-mini",
+            temperature=0.0,
+            max_tokens=50,
+        )
+        assert result.message.content is not None
+
+
 class TestInvalidConfig:
     def test_missing_instructions_raises(self) -> None:
         with pytest.raises(FileNotFoundError):

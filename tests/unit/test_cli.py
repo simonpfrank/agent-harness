@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from agent_harness.cli import parse_args, run_agent, validate_config
+from agent_harness.cli import _apply_overrides, parse_args, run_agent, validate_config
 from agent_harness.types import AgentConfig
 
 
@@ -38,6 +38,37 @@ class TestParseArgs:
     def test_max_cost_override(self) -> None:
         args = parse_args(["run", "./agents/hello", "--max-cost", "0.02"])
         assert args.max_cost == 0.02
+
+    def test_temperature_override(self) -> None:
+        args = parse_args(["run", "./agents/hello", "--temperature", "0.0"])
+        assert args.temperature == 0.0
+
+
+class TestApplyOverrides:
+    def _base_config(self) -> AgentConfig:
+        return AgentConfig(
+            name="t",
+            provider="anthropic",
+            model="claude-haiku-4-5-20251001",
+            agent_dir="./agents/t",
+            instructions="hi",
+            provider_kwargs={"max_tokens": 8192},
+        )
+
+    def test_temperature_merges_into_provider_kwargs(self) -> None:
+        config = self._base_config()
+        _apply_overrides(config, {"temperature": 0.0})
+        assert config.provider_kwargs == {"max_tokens": 8192, "temperature": 0.0}
+
+    def test_no_temperature_leaves_kwargs_untouched(self) -> None:
+        config = self._base_config()
+        _apply_overrides(config, {"temperature": None})
+        assert config.provider_kwargs == {"max_tokens": 8192}
+
+    def test_model_override_still_works(self) -> None:
+        config = self._base_config()
+        _apply_overrides(config, {"model": "gpt-4o"})
+        assert config.model == "gpt-4o"
 
     def test_loop_override(self) -> None:
         args = parse_args(["run", "./agents/hello", "--loop", "reflection"])

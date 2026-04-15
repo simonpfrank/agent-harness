@@ -163,6 +163,9 @@ def chat(
         "messages": api_messages,
         "max_tokens": kwargs.get("max_tokens", 4096),
     }
+    for key in ("temperature", "top_p"):
+        if key in kwargs:
+            create_kwargs[key] = kwargs[key]
     if system:
         create_kwargs["system"] = system
     if api_tools:

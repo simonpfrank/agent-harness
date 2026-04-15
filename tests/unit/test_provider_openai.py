@@ -200,6 +200,32 @@ class TestChat:
         assert mock_client.chat.completions.create.call_count == 2
 
     @patch("agent_harness.providers.openai_provider._get_client")
+    def test_passes_temperature_and_max_tokens(self, mock_get_client: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        choice = MagicMock()
+        choice.message.content = "ok"
+        choice.message.tool_calls = None
+        mock_response = MagicMock()
+        mock_response.choices = [choice]
+        mock_response.usage.prompt_tokens = 1
+        mock_response.usage.completion_tokens = 1
+        mock_client.chat.completions.create.return_value = mock_response
+
+        chat(
+            [Message(role="user", content="hi")],
+            tools=[],
+            model="gpt-4o-mini",
+            temperature=0.0,
+            max_tokens=1234,
+            top_p=0.5,
+        )
+        call_kwargs = mock_client.chat.completions.create.call_args.kwargs
+        assert call_kwargs["temperature"] == 0.0
+        assert call_kwargs["max_tokens"] == 1234
+        assert call_kwargs["top_p"] == 0.5
+
+    @patch("agent_harness.providers.openai_provider._get_client")
     def test_auth_error_fails_immediately(self, mock_get_client: MagicMock) -> None:
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
