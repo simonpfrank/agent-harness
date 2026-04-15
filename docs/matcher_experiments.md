@@ -180,6 +180,28 @@ One row per (config × model) cell. Raw per-run rows in `docs/experiment_results
 **Recommendation:**
 Use **Haiku 4.5 + `value_overlap` + current `context.md` + current `instructions.md` + `temperature=0`** for this task. Do not substitute OpenAI gpt-4o or gpt-4o-mini — they score 5/11 regardless of size because of a vendor-level instruction-following pattern (they treat tool output as the final match list rather than a prior). If we move to a materially harder dataset, the escalation question reopens; within OpenAI, a Sonnet-tier Anthropic model (gpt-5-class on the other vendor would need fresh testing) would be the next step, not more gpt-4o.
 
+### Prompt evolution — actual rule text
+
+The winning config (H1p3) is defined by the text below, which lives in `agents/column-matcher/instructions.md` and `data/context.md` at commit `c364771`. Reproducing the 11/11 result requires all three of: the `value_overlap` tool (H1), these instruction rules, and these context rules.
+
+**New in H1 — `instructions.md` step 4 (call the tool):**
+> `value_overlap` — pass the reference and input **file paths** (same paths you passed to `profile_data`). This returns a deterministic list of `candidates` where sample values overlap by 3+. Each candidate is a STRONG prior — almost always a true match. Verify semantics/types, and if a reference column appears as the target of multiple candidates (an ambiguity), pick the input column whose *name* is the closer phrase-level match; put the other input column in non_matches.
+
+**New in H1 — `instructions.md` step 5 (use the tool output together with name matching):**
+> Analyse the profiles AND candidate list together and produce the complete match set. CRITICAL: value_overlap only surfaces pairs with shared sample values — it will NOT find matches where one column has zero or sparse data, where the values are distinct codes ("M"/"F" in one vs blank in the other), or where the match is purely semantic with no shared values. You MUST also match columns by name and semantics independently of the overlap candidates. Examples you should catch by name/semantics even without overlap: exact/near-exact name matches, domain synonyms (Sex↔Gender, DOB↔Date of Birth, Status↔Participant Status, unique-ID columns, Contingent↔Secondary).
+
+**New in H1p — `context.md` disambiguation rules:**
+> - **Form of Annuity** in a reference/template refers to the *active election* the participant has chosen. When the input has both a "historical" column (e.g. "Original Form of Annuity at Commencement") and an "active/future" column (e.g. "Form of Annuity to Be Purchased"), the ACTIVE one is the correct match. The historical one goes in non_matches.
+> - **Uniform reference columns** (all rows identical, e.g. a single date or placeholder value) are template defaults, not real data. Do NOT match any input column to a uniform reference column — put the input in unmatched_input instead.
+
+**New in H1p2 — `instructions.md` Key Rules (tighter uniform-reference rule):**
+> - **Uniform reference columns are not matchable.** If a reference column has only one distinct value across all rows (e.g. all "2024-05-15"), it is a template default and you must NOT match any input column to it. Put the input in `unmatched_input`, not in `matches`.
+
+**New in H1p3 — `instructions.md` Key Rules (imperative zero-population rule, the change that moved the needle from 10/11 to 11/11):**
+> - **ZERO-population matching is REQUIRED when semantics align.** For any input column with 0% population (no sample values), scan the reference columns for a domain-and-name match. If you find one — a column whose name and domain role clearly correspond (e.g. input "1st Contingent Beneficiary Sex" vs reference "Secondary Gender" given `1st contingent = secondary` in the context file) — you MUST put this pair in `matches` with confidence 0.70. Do not put it in `non_matches`. Do not put it in `unmatched_input`. The absence of sample values is NOT disqualifying evidence — the sample is just small. Phrases like "cannot match sparse input to populated reference without sample value confirmation" are wrong and violate this rule.
+
+Key observation: the version before H1p3 said "Low population is not a reason to reject. […] match it — but score conservatively." Haiku *quoted that rule* in its reasoning and then rejected anyway. The imperative rewrite above, which explicitly tells the model what to do and preemptively rebuts its own cautious phrasing, was the binding change.
+
 **Deferred work:**
 - H2 (semantic_parts in profiler) and H1+H2 stacked were not needed — H1 + prompt iteration got us to ceiling on Haiku. Keep the hypothesis live for harder datasets.
 - Open cross-vendor question: an OpenAI prompt *rewritten* to avoid the tool-literal pattern (e.g. inlining the overlap candidates into the user message and dropping the tool, or wording the rules as "after the tool, you must also...") might close the gap. Not tested.
