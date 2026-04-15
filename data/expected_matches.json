@@ -1,0 +1,33 @@
+{
+  "description": "Ground truth: 11 expected column matches between pension_input.xlsx and pension_reference.xlsx. Source: data/experiment_log.md.",
+  "total_expected": 11,
+  "matches": [
+    {"input": "UniqueID", "reference": "Record ID", "basis": "Both unique PKs, value pattern aligns (C10001-1 / 1B_C10001-1)"},
+    {"input": "Current Participant Status", "reference": "Status", "basis": "Semantic (Retired->Pensioner, Beneficiary->Beneficiary)"},
+    {"input": "State", "reference": "State", "basis": "Exact name + identical values"},
+    {"input": "Zip Code + 4", "reference": "Zipcode", "basis": "Semantic + identical values"},
+    {"input": "Sex", "reference": "Primary Gender", "basis": "Semantic (M->Male, F->Female)"},
+    {"input": "Date of Birth", "reference": "Primary Date of Birth", "basis": "Semantic + values match"},
+    {"input": "1st Contingent Annuitant / Beneficiary Sex", "reference": "Secondary Gender", "basis": "Domain: 1st contingent = secondary. 0% populated in sample."},
+    {"input": "1st Contingent Annuitant / Beneficiary Date of Birth", "reference": "Secondary Date of Birth", "basis": "Domain context + values match"},
+    {"input": "Form of Annuity to Be Purchased", "reference": "Form of Annuity", "basis": "Phrase-level substring match + identical values (JS, SLA, JS & SS)"},
+    {"input": "Current Monthly Benefit", "reference": "Primary Amount", "basis": "Identical sample values (1842.05, 125.26, 28.57)"},
+    {"input": "Contingent Annuitant / Beneficiary 1 Monthly Benefit Payable Upon Participant Death", "reference": "Secondary Amount", "basis": "Domain context + identical values (1155.44, 78.57, 0)"}
+  ],
+  "not_expected_to_match_input": [
+    "Unique Life ID",
+    "Start Date",
+    "End Date",
+    "Guaranteed Months"
+  ],
+  "non_matchable_reference": [
+    "Pricing Group",
+    "Primary Mortality Flag",
+    "Secondary Mortality Flag",
+    "Escalation Group Name",
+    "Pop-up Amount",
+    "Cash Refund As of Date",
+    "Cash Refund Amount",
+    "Death Benefit"
+  ]
+}
