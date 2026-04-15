@@ -148,6 +148,7 @@ One row per (config × model) cell. Raw per-run rows in `docs/experiment_results
 | **H1p3** | **haiku-4-5** | **5** | **11.00** | **0.00** | **0.0** | **$0.097** | **7.0** | **H1p2 + imperative zero-population rule; stopping rule met** |
 | H1p3 | gpt-4o-mini | 5 | 5.00 | 0.00 | 1.0 | $0.008 | 5.2 | Same prompt as winning Haiku cell; mini unchanged at 5/11 |
 | H1p3 | gpt-4o | 5 | 5.00 | 0.00 | 0.0 | $0.150 | 7.0 | Cross-vendor ceiling check. Same 5/11 as mini, but zero FPs (better disambiguation). 18× more expensive than mini for the same accuracy — the problem is not model size, it's vendor instruction-following style on combined tool + name-matching prompts. |
+| H1p3 | o4-mini | 4/5 | 10.25 | 0.96 | 0.25 | $0.134 | 8.5 | OpenAI reasoning model (temperature forced off). Reasoning closes the vendor gap: 2× 11/11, 1× 10/11, 1× 9/11 (1 FP). Run 1 aborted mid-loop with no terminal assistant turn — not yet investigated. See note below. |
 
 **Mid-round interpretation:**
 - **H1 on Haiku is the current winner**: 9/11 consistently, zero variance, $0.09/run.
@@ -171,7 +172,10 @@ One row per (config × model) cell. Raw per-run rows in `docs/experiment_results
 4. **Temperature=0**: a clear win on gpt-4o-mini (+1 mean, half stdev) and neutral on Haiku. Cost of adoption is zero. Use it everywhere.
 
 **What didn't:**
-- `value_overlap` actively hurt both OpenAI models (6.80 → 5.00 on mini; 7.20-equivalent → 5.00 on gpt-4o). Both treat the tool output as the definitive match list and skip name/semantic matches. gpt-4o does this *more cleanly* than mini (0 FPs vs 1 FP from keeping both Form of Annuity candidates), but it's the same failure mode at 18× the cost. This is **not a model-size capability limit** — it's a vendor-level instruction-following style. OpenAI models at temp=0 are tool-literal; Haiku reads tool output as priors and continues reasoning. Confirmed with identical prompt (H1p3) across three models.
+- `value_overlap` actively hurt both OpenAI **non-reasoning** models (6.80 → 5.00 on mini; 7.20-equivalent → 5.00 on gpt-4o). Both treat the tool output as the definitive match list and skip name/semantic matches. gpt-4o does this *more cleanly* than mini (0 FPs vs 1 FP from keeping both Form of Annuity candidates), but it's the same failure mode at 18× the cost. The o4-mini follow-up below shows this is **not a pure vendor-level limit** — it's a pattern of the gpt-4o instruction-following family specifically.
+
+**Follow-up — OpenAI reasoning model (o4-mini):**
+Running H1p3 on `o4-mini` (OpenAI's small reasoning model; temperature is automatically dropped by the provider because reasoning models reject it) produced 10.25 mean / stdev 0.96 / $0.13/run across 4 successful runs (run 1 aborted mid-loop — the model called tools through turn 6, then stopped without emitting a terminal assistant message, and no output file was written). This is a big jump from gpt-4o's 5.00 and puts o4-mini within reach of Haiku's 11.00. Two caveats: (1) reasoning re-introduces run-to-run variance (Haiku's stdev 0 → o4-mini's stdev 0.96) even though sampling temperature is effectively zero — this is *reasoning-path* randomness, not token sampling noise; (2) the aborted-first-run bug needs investigation before o4-mini can be a reliable default. The clean takeaway: **reasoning closes the cross-vendor gap on this task; it's reasoning, not vendor and not model size, that's the lever.**
 
 **Incidental findings:**
 - A harness bug was discovered and fixed: `max_output_chars=10000` (default) truncated `profile_data` output. The original `value_overlap` design received the profile JSON as a tool argument, and the truncated profile was then *hallucinated* by the model into compressed JSON when re-emitted. Fixed by making `value_overlap` read files directly, and by raising the agent's `max_output_chars` to 40000.

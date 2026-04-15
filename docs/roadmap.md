@@ -26,7 +26,22 @@ When an item ships, move it to the **Done** section at the bottom with a commit 
 
 **Definition of done:** 5 runs on a 5.x model logged in `docs/matcher_experiments.md` results table with real cost and accuracy, plus a paragraph in Findings answering "did 5.x close the gap or not".
 
-### OpenAI reasoning models (o1/o3/o4) — provider support (added 2026-04-15)
+### Investigate o4-mini run-1 abort (added 2026-04-15)
+
+**What:** On the first of 5 H1p3 runs on `o4-mini` (commit `49e0799` era), the agent completed tool calls through turn 6/10 and then stopped with a `tool_result` as the last trace event — no terminal assistant message, no `write_file`, no output JSON. Subprocess exited 1 silently. Runs 2–5 on the same config succeeded (2× 11/11, 1× 10/11, 1× 9/11).
+
+**Why:** If o4-mini is going to be a real option for this task it needs to be reliable. A ~20% silent-abort rate is not acceptable.
+
+**Work:**
+1. Capture the exact API response that led to the tool_result-as-terminal state. Might be a `length` finish reason, an empty content field, or the react loop not handling a specific stop_reason shape.
+2. Check `agent_harness/loops/react.py` for how it terminates — does it require an assistant message with no tool_calls, or will it exit on other shapes?
+3. Add a regression test.
+
+---
+
+### OpenAI reasoning models (o1/o3/o4) — provider support (added 2026-04-15, partially done)
+
+**Status:** o4-mini is working — provider detects `o1`/`o3`/`o4` prefix, drops `temperature`/`top_p`, renames `max_tokens` → `max_completion_tokens`. Shipped in a commit following `49e0799`. Remaining: `reasoning_effort` parameter plumbing and a `max_completion_tokens` default higher than our current `max_tokens=4096`.
 
 **What:** Support OpenAI's reasoning models in the harness.
 

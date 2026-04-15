@@ -226,6 +226,37 @@ class TestChat:
         assert call_kwargs["top_p"] == 0.5
 
     @patch("agent_harness.providers.openai_provider._get_client")
+    def test_reasoning_model_drops_temperature_and_renames_max_tokens(
+        self, mock_get_client: MagicMock,
+    ) -> None:
+        """o-series reasoning models reject temperature/top_p and use
+        max_completion_tokens instead of max_tokens."""
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        choice = MagicMock()
+        choice.message.content = "ok"
+        choice.message.tool_calls = None
+        mock_response = MagicMock()
+        mock_response.choices = [choice]
+        mock_response.usage.prompt_tokens = 1
+        mock_response.usage.completion_tokens = 1
+        mock_client.chat.completions.create.return_value = mock_response
+
+        chat(
+            [Message(role="user", content="hi")],
+            tools=[],
+            model="o4-mini",
+            temperature=0.0,
+            top_p=0.5,
+            max_tokens=1234,
+        )
+        call_kwargs = mock_client.chat.completions.create.call_args.kwargs
+        assert "temperature" not in call_kwargs
+        assert "top_p" not in call_kwargs
+        assert "max_tokens" not in call_kwargs
+        assert call_kwargs["max_completion_tokens"] == 1234
+
+    @patch("agent_harness.providers.openai_provider._get_client")
     def test_auth_error_fails_immediately(self, mock_get_client: MagicMock) -> None:
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client

@@ -77,3 +77,10 @@ H1p3,openai,gpt-4o,2,5,0,0.1469,7,
 H1p3,openai,gpt-4o,3,5,0,0.1476,7,
 H1p3,openai,gpt-4o,4,5,0,0.1557,7,
 H1p3,openai,gpt-4o,5,5,0,0.1421,7,
+H1p3,openai,o4-mini,1,0,0,0.0351,6,"No output file. Exit 1. stderr head: 2026-04-15 18:38:29,335 INFO skills load_skills:38 Loaded 4 skills: code-review, column-matching, csv-analysis, system-tools
+2026-04-15 18:38:33,078 INFO react run:46 Turn 1: 2934 in / 151 out tokens
+"
+H1p3,openai,o4-mini,2,11,0,0.1623,10,
+H1p3,openai,o4-mini,3,11,0,0.1207,8,
+H1p3,openai,o4-mini,4,10,0,0.1387,8,
+H1p3,openai,o4-mini,5,9,1,0.1128,8,

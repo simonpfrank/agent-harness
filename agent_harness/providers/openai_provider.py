@@ -166,9 +166,14 @@ def chat(
         "model": model,
         "messages": api_messages,
     }
-    for key in ("temperature", "max_tokens", "top_p"):
-        if key in kwargs:
-            create_kwargs[key] = kwargs[key]
+    is_reasoning = model.startswith(("o1", "o3", "o4"))
+    if is_reasoning:
+        if "max_tokens" in kwargs:
+            create_kwargs["max_completion_tokens"] = kwargs["max_tokens"]
+    else:
+        for key in ("temperature", "max_tokens", "top_p"):
+            if key in kwargs:
+                create_kwargs[key] = kwargs[key]
     if api_tools:
         create_kwargs["tools"] = api_tools
 
