@@ -146,6 +146,8 @@ One row per (config × model) cell. Raw per-run rows in `docs/experiment_results
 | H1p | haiku-4-5 | 5 | 10.20 | 0.45 | 0.4 | $0.095 | 7.0 | H1 + context rule for Form of Annuity disambiguation + uniform-ref rule |
 | H1p2 | haiku-4-5 | 5 | 10.00 | 0.00 | 0.0 | $0.095 | 7.0 | H1p + stronger uniform-reference rule; FPs eliminated |
 | **H1p3** | **haiku-4-5** | **5** | **11.00** | **0.00** | **0.0** | **$0.097** | **7.0** | **H1p2 + imperative zero-population rule; stopping rule met** |
+| H1p3 | gpt-4o-mini | 5 | 5.00 | 0.00 | 1.0 | $0.008 | 5.2 | Same prompt as winning Haiku cell; mini unchanged at 5/11 |
+| H1p3 | gpt-4o | 5 | 5.00 | 0.00 | 0.0 | $0.150 | 7.0 | Cross-vendor ceiling check. Same 5/11 as mini, but zero FPs (better disambiguation). 18× more expensive than mini for the same accuracy — the problem is not model size, it's vendor instruction-following style on combined tool + name-matching prompts. |
 
 **Mid-round interpretation:**
 - **H1 on Haiku is the current winner**: 9/11 consistently, zero variance, $0.09/run.
@@ -169,19 +171,19 @@ One row per (config × model) cell. Raw per-run rows in `docs/experiment_results
 4. **Temperature=0**: a clear win on gpt-4o-mini (+1 mean, half stdev) and neutral on Haiku. Cost of adoption is zero. Use it everywhere.
 
 **What didn't:**
-- `value_overlap` actively hurt gpt-4o-mini (6.80 → 5.00). The smaller model treats the tool output as the definitive match list and drops name/semantic matches that aren't value-aligned. This is a capability limit, not a prompt issue — confirmed across two prompt revisions.
+- `value_overlap` actively hurt both OpenAI models (6.80 → 5.00 on mini; 7.20-equivalent → 5.00 on gpt-4o). Both treat the tool output as the definitive match list and skip name/semantic matches. gpt-4o does this *more cleanly* than mini (0 FPs vs 1 FP from keeping both Form of Annuity candidates), but it's the same failure mode at 18× the cost. This is **not a model-size capability limit** — it's a vendor-level instruction-following style. OpenAI models at temp=0 are tool-literal; Haiku reads tool output as priors and continues reasoning. Confirmed with identical prompt (H1p3) across three models.
 
 **Incidental findings:**
 - A harness bug was discovered and fixed: `max_output_chars=10000` (default) truncated `profile_data` output. The original `value_overlap` design received the profile JSON as a tool argument, and the truncated profile was then *hallucinated* by the model into compressed JSON when re-emitted. Fixed by making `value_overlap` read files directly, and by raising the agent's `max_output_chars` to 40000.
 - A provider-kwargs passthrough bug was discovered and fixed as a prerequisite: neither provider was passing `temperature` through to the API, so the original H4 hypothesis was untestable until fixed.
 
 **Recommendation:**
-Use Haiku 4.5 + `value_overlap` + current `context.md` + current `instructions.md` + `temperature=0`. Do not escalate to a larger model for this dataset — the last 2 hard misses are solved at the Haiku tier, so a Sonnet/gpt-4o ceiling check is not needed to declare a winner. If we take on a materially harder dataset, the escalation question reopens.
+Use **Haiku 4.5 + `value_overlap` + current `context.md` + current `instructions.md` + `temperature=0`** for this task. Do not substitute OpenAI gpt-4o or gpt-4o-mini — they score 5/11 regardless of size because of a vendor-level instruction-following pattern (they treat tool output as the final match list rather than a prior). If we move to a materially harder dataset, the escalation question reopens; within OpenAI, a Sonnet-tier Anthropic model (gpt-5-class on the other vendor would need fresh testing) would be the next step, not more gpt-4o.
 
 **Deferred work:**
-- H2 (semantic_parts in profiler) and H1+H2 stacked were not needed — H1 + prompt iteration got us to ceiling. Keep the hypothesis live for harder datasets.
-- Open question: does H1p3 on mini improve now that the prompt is better? Worth ~$0.05 to find out if we want a floor-cost recommendation.
-- Open question: does gpt-4o match Haiku at comparable cost? Worth ~$1.50 if we want a cross-vendor recommendation.
+- H2 (semantic_parts in profiler) and H1+H2 stacked were not needed — H1 + prompt iteration got us to ceiling on Haiku. Keep the hypothesis live for harder datasets.
+- Open cross-vendor question: an OpenAI prompt *rewritten* to avoid the tool-literal pattern (e.g. inlining the overlap candidates into the user message and dropping the tool, or wording the rules as "after the tool, you must also...") might close the gap. Not tested.
+- Open question: does gpt-4o at temp=0.3 or above "unblock" the semantic matching it's skipping? Would be a cheap follow-up.
 
 ---
 
