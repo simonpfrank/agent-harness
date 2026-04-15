@@ -217,8 +217,10 @@ The winning config (H1p3) is defined by the text below, which lives in `agents/c
 
 Key observation: the version before H1p3 said "Low population is not a reason to reject. […] match it — but score conservatively." Haiku *quoted that rule* in its reasoning and then rejected anyway. The imperative rewrite above, which explicitly tells the model what to do and preemptively rebuts its own cautious phrasing, was the binding change.
 
-**Deferred work:**
+**Deferred work** (see `docs/roadmap.md` for durable tracking):
 - H2 (semantic_parts in profiler) and H1+H2 stacked were not needed — H1 + prompt iteration got us to ceiling on Haiku. Keep the hypothesis live for harder datasets.
+- OpenAI GPT-5.x family comparison — test on a fair-tier vendor-equivalent to Haiku.
+- OpenAI reasoning models (o3-mini, o4-mini) — answers the reasoning-vs-vendor-style open question.
 - Open cross-vendor question: an OpenAI prompt *rewritten* to avoid the tool-literal pattern (e.g. inlining the overlap candidates into the user message and dropping the tool, or wording the rules as "after the tool, you must also...") might close the gap. Not tested.
 - Open question: does gpt-4o at temp=0.3 or above "unblock" the semantic matching it's skipping? Would be a cheap follow-up.
 

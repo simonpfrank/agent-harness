@@ -1,7 +1,7 @@
 ## Last Session (2026-04-08)
 **Status:** All phases complete. Publish-ready.
 **Working on:** Final polish, CLI overrides, provider retry extraction
-**Next step:** Publish or begin backlog items (MCP, async, model fallback)
+**Next step:** Publish or begin backlog items. See `docs/roadmap.md` for the durable list (MCP, async, OpenAI 5.x + reasoning models, harness fixes).
 **Notes:** 296 tests (240 unit + 56 integration). 7 loop patterns, 5 safety hooks, 2 providers, custom tools/skills. MIT license. All quality gates pass.
 
 ---
