@@ -142,7 +142,10 @@ One row per (config × model) cell. Raw per-run rows in `docs/experiment_results
 | H0 | haiku-4-5 | 5 | 7.20 | 0.45 | 2.6 | $0.076 | 5.2 | One 12-FP runaway in run 3 |
 | H4 | haiku-4-5 | 5 | 7.20 | 0.45 | 0.8 | $0.063 | 5.0 | temp=0 reduced FP spread, no accuracy change |
 | H1 | gpt-4o-mini | 5 | 5.00 | 0.00 | 1.0 | $0.009 | 5.2 | value_overlap tool; mini treats tool output as the definitive match list and drops name/semantic matches |
-| H1 | haiku-4-5 | 5 | **9.00** | **0.00** | 1.8 | $0.091 | 7.0 | value_overlap tool; **breakthrough**: +1.8 vs H4 with zero variance |
+| H1 | haiku-4-5 | 5 | 9.00 | 0.00 | 1.8 | $0.091 | 7.0 | value_overlap tool; +1.8 vs H4, zero variance |
+| H1p | haiku-4-5 | 5 | 10.20 | 0.45 | 0.4 | $0.095 | 7.0 | H1 + context rule for Form of Annuity disambiguation + uniform-ref rule |
+| H1p2 | haiku-4-5 | 5 | 10.00 | 0.00 | 0.0 | $0.095 | 7.0 | H1p + stronger uniform-reference rule; FPs eliminated |
+| **H1p3** | **haiku-4-5** | **5** | **11.00** | **0.00** | **0.0** | **$0.097** | **7.0** | **H1p2 + imperative zero-population rule; stopping rule met** |
 
 **Mid-round interpretation:**
 - **H1 on Haiku is the current winner**: 9/11 consistently, zero variance, $0.09/run.
@@ -157,7 +160,28 @@ One row per (config × model) cell. Raw per-run rows in `docs/experiment_results
 
 ### Findings
 
-*To be written at end of round.*
+**Winner: H1p3 on Haiku 4.5.** 5 runs, 11/11 correct each run, 0 false positives, stdev 0, $0.097/run. Stopping rule (`mean_correct ≥ 10 AND stdev ≤ 0.5`) was met and exceeded. Total spend for the round: ~$2.70 of the $10 budget.
+
+**What worked:**
+1. **`value_overlap` tool (H1)**: deterministic pre-scan surfaces value-aligned pairs. Closed the "never considered" failures (Primary Amount, Secondary Amount, Form of Annuity to Be Purchased).
+2. **Context-file rules**: a one-line disambiguation rule for Form of Annuity ("active election beats historical") and a "uniform reference columns are template defaults" rule closed one persistent FP and one persistent miss.
+3. **Imperative zero-population rule**: replacing a defensive "do not reject" phrasing with a positive "you MUST include this pair in `matches` at 0.70" fixed the Secondary Gender miss. The agent explicitly cited the old rule while violating it — Haiku treats defensive rules as permissive, imperative rules as binding.
+4. **Temperature=0**: a clear win on gpt-4o-mini (+1 mean, half stdev) and neutral on Haiku. Cost of adoption is zero. Use it everywhere.
+
+**What didn't:**
+- `value_overlap` actively hurt gpt-4o-mini (6.80 → 5.00). The smaller model treats the tool output as the definitive match list and drops name/semantic matches that aren't value-aligned. This is a capability limit, not a prompt issue — confirmed across two prompt revisions.
+
+**Incidental findings:**
+- A harness bug was discovered and fixed: `max_output_chars=10000` (default) truncated `profile_data` output. The original `value_overlap` design received the profile JSON as a tool argument, and the truncated profile was then *hallucinated* by the model into compressed JSON when re-emitted. Fixed by making `value_overlap` read files directly, and by raising the agent's `max_output_chars` to 40000.
+- A provider-kwargs passthrough bug was discovered and fixed as a prerequisite: neither provider was passing `temperature` through to the API, so the original H4 hypothesis was untestable until fixed.
+
+**Recommendation:**
+Use Haiku 4.5 + `value_overlap` + current `context.md` + current `instructions.md` + `temperature=0`. Do not escalate to a larger model for this dataset — the last 2 hard misses are solved at the Haiku tier, so a Sonnet/gpt-4o ceiling check is not needed to declare a winner. If we take on a materially harder dataset, the escalation question reopens.
+
+**Deferred work:**
+- H2 (semantic_parts in profiler) and H1+H2 stacked were not needed — H1 + prompt iteration got us to ceiling. Keep the hypothesis live for harder datasets.
+- Open question: does H1p3 on mini improve now that the prompt is better? Worth ~$0.05 to find out if we want a floor-cost recommendation.
+- Open question: does gpt-4o match Haiku at comparable cost? Worth ~$1.50 if we want a cross-vendor recommendation.
 
 ---
 

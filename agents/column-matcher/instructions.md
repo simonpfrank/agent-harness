@@ -21,6 +21,8 @@ That is 7 steps. Do not add extra steps. Do not use execute_code or read_file to
 - **Cite your signals.** Every match reasoning must name the specific signals: sample values, data types, patterns, semantics.
 - **Write the JSON file before anything else.** Your primary deliverable is the mapping file.
 - **Low population is not a reason to reject.** A small sample may not populate every column. If column name semantics and domain context strongly align, match it — but score conservatively (0.70-0.85) to reflect the missing sample value signal.
+- **ZERO-population matching is REQUIRED when semantics align.** For any input column with 0% population (no sample values), scan the reference columns for a domain-and-name match. If you find one — a column whose name and domain role clearly correspond (e.g. input "1st Contingent Beneficiary Sex" vs reference "Secondary Gender" given `1st contingent = secondary` in the context file) — you MUST put this pair in `matches` with confidence 0.70. Do not put it in `non_matches`. Do not put it in `unmatched_input`. The absence of sample values is NOT disqualifying evidence — the sample is just small. Phrases like "cannot match sparse input to populated reference without sample value confirmation" are wrong and violate this rule.
+- **Uniform reference columns are not matchable.** If a reference column has only one distinct value across all rows (e.g. all "2024-05-15"), it is a template default and you must NOT match any input column to it. Put the input in `unmatched_input`, not in `matches`.
 
 ## Memory Rules
 
