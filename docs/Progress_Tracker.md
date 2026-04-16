@@ -1,8 +1,8 @@
-## Last Session (2026-04-08)
-**Status:** All phases complete. Publish-ready.
-**Working on:** Final polish, CLI overrides, provider retry extraction
-**Next step:** Publish or begin backlog items. See `docs/roadmap.md` for the durable list (MCP, async, OpenAI 5.x + reasoning models, harness fixes).
-**Notes:** 296 tests (240 unit + 56 integration). 7 loop patterns, 5 safety hooks, 2 providers, custom tools/skills. MIT license. All quality gates pass.
+## Last Session (2026-04-16)
+**Status:** In Progress
+**Working on:** Harsh code review focused on simplicity, consistency, and hidden complexity in the harness runtime
+**Next step:** Triage `docs/codex_code_review.md` findings, starting with permissions flow, sub-agent runtime consistency, and removal of global runtime state
+**Notes:** Review document added at `docs/codex_code_review.md`. Targeted tests passed in `.venv`: hooks/permissions/routing (`64 passed`) and CLI (`24 passed`). Main review focus remains permissions flow, sub-agent runtime consistency, and removal of global runtime state.
 
 ---
 

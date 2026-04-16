@@ -7,9 +7,11 @@ from agent_harness.tools import (
     execute_code,
     execute_tool,
     generate_schema,
+    list_directory,
     read_file,
     registry,
     run_command,
+    write_file,
 )
 from agent_harness.types import ToolCall
 
@@ -139,6 +141,58 @@ class TestExecutorRegistry:
         finally:
             tools.active_executor = old
             del executor_registry["fake"]
+
+
+class TestWriteFile:
+    def test_writes_content(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "out.txt")
+            result = write_file(path, "hello world")
+            assert "hello world" == open(path).read()
+            assert "11" in result  # char count
+
+    def test_creates_parent_dirs(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "sub", "deep", "file.txt")
+            write_file(path, "nested")
+            assert open(path).read() == "nested"
+
+    def test_overwrites_existing(self) -> None:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+            f.write("old")
+            f.flush()
+            write_file(f.name, "new")
+            assert open(f.name).read() == "new"
+        os.unlink(f.name)
+
+    def test_registered(self) -> None:
+        assert "write_file" in registry
+
+
+class TestListDirectory:
+    def test_lists_files(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            open(os.path.join(d, "a.txt"), "w").close()
+            open(os.path.join(d, "b.txt"), "w").close()
+            os.mkdir(os.path.join(d, "subdir"))
+            output = list_directory(d)
+            assert "a.txt" in output
+            assert "b.txt" in output
+            assert "subdir/" in output
+
+    def test_empty_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            output = list_directory(d)
+            assert output == "Directory is empty."
+
+    def test_nonexistent_raises(self) -> None:
+        import pytest
+
+        with pytest.raises(FileNotFoundError):
+            list_directory("/no/such/dir")
+
+    def test_registered(self) -> None:
+        assert "list_directory" in registry
 
 
 class TestExecuteToolTruncation:

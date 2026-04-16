@@ -1,8 +1,9 @@
-name: hello-local
+name: local-coder
 provider: openai
 model: qwen/qwen3-4b-thinking-2507
+loop: react
 tools: [run_command, read_file, execute_code]
-max_turns: 10
+max_turns: 15
 max_cost: 1.00
 provider_kwargs:
   base_url: "http://192.168.0.13:1234/v1"

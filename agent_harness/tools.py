@@ -130,6 +130,44 @@ def read_file(path: str) -> str:
     return Path(path).read_text()
 
 
+def write_file(path: str, content: str) -> str:
+    """Write content to a file, creating parent directories if needed.
+
+    Args:
+        path: Path to the file to write
+        content: Content to write
+
+    Returns:
+        Confirmation with character count.
+    """
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content)
+    return f"Written {len(content)} chars to {path}"
+
+
+def list_directory(path: str = ".") -> str:
+    """List files and directories at the given path.
+
+    Args:
+        path: Directory to list
+
+    Returns:
+        Newline-separated listing. Directories have a trailing slash.
+
+    Raises:
+        FileNotFoundError: If the path does not exist.
+    """
+    target = Path(path)
+    if not target.is_dir():
+        raise FileNotFoundError(f"Directory not found: {path}")
+    entries = sorted(target.iterdir())
+    if not entries:
+        return "Directory is empty."
+    lines = [f"{e.name}/" if e.is_dir() else e.name for e in entries]
+    return "\n".join(lines)
+
+
 def _subprocess_executor(code: str, language: str, timeout: int) -> str:
     """Execute code via subprocess.
 
@@ -177,6 +215,8 @@ def execute_code(code: str, language: str = "python") -> str:
 registry: dict[str, Callable[..., str]] = {
     "run_command": run_command,
     "read_file": read_file,
+    "write_file": write_file,
+    "list_directory": list_directory,
     "execute_code": execute_code,
     "save_memory": save_memory,
     "recall_memory": recall_memory,

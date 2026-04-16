@@ -16,3 +16,4 @@ htmlcov/
 **/.allowed_domains.yaml
 **/.permissions.yaml
 docs/research/
+data/
