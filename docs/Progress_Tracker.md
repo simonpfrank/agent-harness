@@ -1,8 +1,8 @@
 ## Last Session (2026-04-16)
-**Status:** In Progress
-**Working on:** Harsh code review focused on simplicity, consistency, and hidden complexity in the harness runtime
-**Next step:** Triage `docs/codex_code_review.md` findings, starting with permissions flow, sub-agent runtime consistency, and removal of global runtime state
-**Notes:** Review document added at `docs/codex_code_review.md`. Targeted tests passed in `.venv`: hooks/permissions/routing (`64 passed`) and CLI (`24 passed`). Main review focus remains permissions flow, sub-agent runtime consistency, and removal of global runtime state.
+**Status:** Ready for Next Phase
+**Working on:** OpenAI provider hardening for supported text models
+**Next step:** Challenge and refine `docs/streaming-plan.md`
+**Notes:** The OpenAI provider now routes supported hosted text models through Responses, keeps Chat Completions fallback for custom `base_url` backends, rejects excluded hosted models clearly, and includes GPT-5 cost/context metadata. The temporary OpenAI provider plan doc has been removed after implementation. Verified test state is `.venv/bin/pytest tests/unit -q` -> `305 passed in 1.65s`, host `.venv/bin/pytest tests/integration -q` -> `60 passed in 66.98s (0:01:06)`, `.venv/bin/ruff check .` -> `All checks passed!`, and `env MYPYPATH=. .venv/bin/mypy --explicit-package-bases --exclude '^(build|dist)/' agent_harness tests tools scripts` -> `Success: no issues found in 76 source files`.
 
 ---
 
@@ -14,10 +14,10 @@
 |-----------|-----------|------|-------------------|
 | types.py | ✅ (10) | ✅ | ⏭️ N/A |
 | tools.py + discovery | ✅ (24) | ✅ | ✅ |
-| budget.py | ✅ (5) | ✅ | ✅ |
+| budget.py | ✅ (6) | ✅ | ✅ |
 | display.py | ✅ (7) | ✅ | ⏭️ N/A |
 | providers/anthropic.py | ✅ (11) | ✅ | ✅ (4) |
-| providers/openai_provider.py | ✅ (12) | ✅ | ✅ (3) |
+| providers/openai_provider.py | ✅ (25) | ✅ | ✅ (6) |
 | providers/retry.py | ✅ (via provider tests) | ✅ | ✅ |
 | config.py | ✅ (9) | ✅ | ✅ |
 | cli.py + overrides | ✅ (20) | ✅ | ⏭️ N/A |
@@ -45,7 +45,7 @@
 | loops/ralph.py | ✅ (5) | ✅ | ✅ (1) |
 | loops/debate.py | ✅ (4) | ✅ | ✅ (1) |
 | loops/common.py | ⏭️ N/A | ✅ | ✅ (via loops) |
-| context.py | ✅ (7) | ✅ | ⏭️ N/A |
+| context.py | ✅ (8) | ✅ | ⏭️ N/A |
 
 ## Phase 4 — Memory, Routing, and Agent Building ✅
 

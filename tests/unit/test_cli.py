@@ -129,16 +129,12 @@ class TestValidateConfig:
 
 
 class TestRunAgent:
-    @patch("agent_harness.cli.validate_config")
+    @patch("agent_harness.cli.prepare_runtime")
     @patch("agent_harness.cli.config_loader")
-    @patch("agent_harness.cli.loop_registry")
-    @patch("agent_harness.cli.provider_registry")
     def test_single_command_mode(
         self,
-        mock_providers: MagicMock,
-        mock_loops: MagicMock,
         mock_config: MagicMock,
-        _mock_validate: MagicMock,
+        mock_prepare_runtime: MagicMock,
     ) -> None:
         cfg = AgentConfig(
             name="test",
@@ -149,12 +145,16 @@ class TestRunAgent:
             tools=["run_command"],
             max_turns=5,
         )
+        runtime = MagicMock()
+        runtime.init_messages.return_value = []
         mock_config.load.return_value = cfg
-        mock_loops.__getitem__ = MagicMock(return_value=MagicMock(return_value="result"))
-        mock_providers.__getitem__ = MagicMock(return_value=MagicMock())
+        mock_prepare_runtime.return_value = runtime
 
         run_agent("./agents/hello", prompt="list files")
+
         mock_config.load.assert_called_once_with("./agents/hello")
+        runtime.run_messages.assert_called_once()
+        runtime.finalize.assert_called_once()
 
     @patch("agent_harness.cli.config_loader")
     def test_invalid_agent_dir(self, mock_config: MagicMock) -> None:
@@ -162,18 +162,14 @@ class TestRunAgent:
         with pytest.raises(SystemExit):
             run_agent("/bad/path", prompt="test")
 
-    @patch("agent_harness.cli.validate_config")
     @patch("agent_harness.cli.prompt_user")
+    @patch("agent_harness.cli.prepare_runtime")
     @patch("agent_harness.cli.config_loader")
-    @patch("agent_harness.cli.loop_registry")
-    @patch("agent_harness.cli.provider_registry")
     def test_repl_mode_exit(
         self,
-        mock_providers: MagicMock,
-        mock_loops: MagicMock,
         mock_config: MagicMock,
+        mock_prepare_runtime: MagicMock,
         mock_prompt: MagicMock,
-        _mock_validate: MagicMock,
     ) -> None:
         cfg = AgentConfig(
             name="test",
@@ -183,25 +179,25 @@ class TestRunAgent:
             instructions="Be helpful",
             max_turns=5,
         )
+        runtime = MagicMock()
+        runtime.init_messages.return_value = []
         mock_config.load.return_value = cfg
-        mock_loops.__getitem__ = MagicMock(return_value=MagicMock(return_value="ok"))
-        mock_providers.__getitem__ = MagicMock(return_value=MagicMock())
+        mock_prepare_runtime.return_value = runtime
         mock_prompt.return_value = "exit"
 
-        run_agent("./agents/hello")  # no prompt = REPL, "exit" stops it
+        run_agent("./agents/hello")
 
-    @patch("agent_harness.cli.validate_config")
+        runtime.run_messages.assert_not_called()
+        runtime.finalize.assert_called_once()
+
     @patch("agent_harness.cli.prompt_user")
+    @patch("agent_harness.cli.prepare_runtime")
     @patch("agent_harness.cli.config_loader")
-    @patch("agent_harness.cli.loop_registry")
-    @patch("agent_harness.cli.provider_registry")
     def test_repl_mode_keyboard_interrupt(
         self,
-        mock_providers: MagicMock,
-        mock_loops: MagicMock,
         mock_config: MagicMock,
+        mock_prepare_runtime: MagicMock,
         mock_prompt: MagicMock,
-        _mock_validate: MagicMock,
     ) -> None:
         cfg = AgentConfig(
             name="test",
@@ -211,9 +207,12 @@ class TestRunAgent:
             instructions="Be helpful",
             max_turns=5,
         )
+        runtime = MagicMock()
+        runtime.init_messages.return_value = []
         mock_config.load.return_value = cfg
-        mock_loops.__getitem__ = MagicMock(return_value=MagicMock(return_value="ok"))
-        mock_providers.__getitem__ = MagicMock(return_value=MagicMock())
+        mock_prepare_runtime.return_value = runtime
         mock_prompt.side_effect = KeyboardInterrupt
 
-        run_agent("./agents/hello")  # should exit gracefully
+        run_agent("./agents/hello")
+
+        runtime.finalize.assert_called_once()

@@ -1,0 +1,318 @@
+"""Shared runtime preparation and execution helpers."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from agent_harness.budget import Budget
+from agent_harness.display import (
+    show_budget,
+    show_response,
+    show_tool_call,
+    show_tool_result,
+)
+from agent_harness.hooks import Hooks
+from agent_harness.loops import registry as loop_registry
+from agent_harness.permissions import PermissionDecision, Permissions
+from agent_harness.providers import registry as provider_registry
+from agent_harness.session import load_session
+from agent_harness.skills import load_skills
+from agent_harness.tools import (
+    ToolRuntimeContext,
+    build_tool_registry,
+    discover_tools,
+    execute_tool,
+    generate_schema,
+)
+from agent_harness.trace import Tracer
+from agent_harness.types import AgentConfig, LoopCallbacks, Message, Response, ToolCall, ToolResult, Usage
+
+PermissionPromptFn = Callable[[ToolCall], PermissionDecision | bool]
+DomainPromptFn = Callable[[str], bool]
+
+
+class _NullTracer:
+    def record(self, _event: str, **_data: object) -> None:
+        return
+
+
+@dataclass
+class PreparedRuntime:
+    """Prepared execution state for one configured agent run.
+
+    Attributes:
+        config: Loaded agent configuration.
+        chat_fn: Provider chat function for the configured provider.
+        loop_fn: Selected loop implementation.
+        tool_registry: Per-run tool registry with built-ins bound to runtime context.
+        tool_schemas: JSON schemas for tools enabled in the agent config.
+        callbacks: Loop callbacks for display, tool execution, and budget handling.
+        permissions: Permission manager for the current run.
+        tracer: Structured trace sink, or a no-op tracer when tracing is disabled.
+    """
+
+    config: AgentConfig
+    chat_fn: Callable[..., Response]
+    loop_fn: Callable[..., str]
+    tool_registry: dict[str, Callable[..., str]]
+    tool_schemas: list[dict[str, Any]]
+    callbacks: LoopCallbacks
+    permissions: Permissions
+    tracer: Tracer | _NullTracer
+
+    def init_messages(
+        self,
+        session_path: str | None = None,
+        existing_messages: list[Message] | None = None,
+    ) -> list[Message]:
+        """Load session or build a fresh message list for this agent.
+
+        Args:
+            session_path: Optional saved-session JSON path.
+            existing_messages: Existing conversation state to continue, such as a handoff.
+
+        Returns:
+            Message list ready to pass into the configured loop.
+        """
+        if existing_messages is not None:
+            if existing_messages:
+                return existing_messages
+            return [Message(role="system", content=build_system_prompt(self.config))]
+        messages = load_session(session_path) if session_path else []
+        if not messages:
+            messages = [Message(role="system", content=build_system_prompt(self.config))]
+        return messages
+
+    def run_messages(self, messages: list[Message], prompt: str | None = None) -> str:
+        """Run the configured loop against a message list.
+
+        Args:
+            messages: Conversation history to mutate in place.
+            prompt: Optional user prompt to append before running.
+
+        Returns:
+            Final assistant text returned by the loop.
+        """
+        if prompt is not None:
+            self.tracer.record("user_prompt", content=prompt)
+            messages.append(Message(role="user", content=prompt))
+        return self.loop_fn(self.chat_fn, messages, self.tool_schemas, self.config, self.callbacks)
+
+    def finalize(self) -> None:
+        """Persist runtime state that should survive the current process.
+
+        Currently this means writing persistent permission approvals if they changed.
+        """
+        self.permissions.save()
+
+
+def build_system_prompt(config: AgentConfig) -> str:
+    """Combine instructions, tools guidance, and skills into a system prompt.
+
+    Args:
+        config: Agent configuration containing instructions, optional tools guidance,
+            and the agent directory used to discover local skills.
+
+    Returns:
+        Final system prompt text in the order: instructions, tools guidance, skills.
+    """
+    prompt = config.instructions
+    if config.tools_guidance:
+        prompt += "\n\n" + config.tools_guidance
+    skills_content = load_skills("skills", f"{config.agent_dir}/skills")
+    if skills_content:
+        prompt += "\n\n" + skills_content
+    return prompt
+
+
+def trace_context(tracer: Tracer | _NullTracer, config: AgentConfig) -> None:
+    """Record which files were loaded into the agent context.
+
+    Args:
+        tracer: Trace sink for structured events.
+        config: Agent configuration used to locate prompt source files.
+    """
+    files: list[str] = [
+        f"{config.agent_dir}/config.yaml",
+        f"{config.agent_dir}/instructions.md",
+    ]
+    tools_md = f"{config.agent_dir}/tools.md"
+    if Path(tools_md).exists():
+        files.append(tools_md)
+    for skills_dir in ["skills", f"{config.agent_dir}/skills"]:
+        skills_path = Path(skills_dir)
+        if skills_path.is_dir():
+            for skill_dir in sorted(skills_path.iterdir()):
+                skill_file = skill_dir / "SKILL.md"
+                if skill_file.exists():
+                    files.append(str(skill_file))
+    tracer.record("context_loaded", agent=config.name, files=files, tools=config.tools, loop=config.loop)
+
+
+def validate_config(
+    config: AgentConfig,
+    tool_registry: dict[str, Callable[..., str]] | None = None,
+) -> None:
+    """Validate config references against available providers, tools, and loops.
+
+    Args:
+        config: Loaded agent configuration to validate.
+        tool_registry: Optional tool registry to validate against. If omitted,
+            validation uses the built-in registry only.
+
+    Raises:
+        ValueError: If provider, tool, loop, or max_turns is invalid.
+    """
+    active_registry = tool_registry or build_tool_registry()
+    if config.provider not in provider_registry:
+        raise ValueError(f"Unknown provider: {config.provider}")
+    for tool_name in config.tools:
+        if tool_name not in active_registry:
+            raise ValueError(f"Unknown tool: {tool_name}")
+    if config.loop not in loop_registry:
+        raise ValueError(f"Unknown loop: {config.loop}")
+    if config.max_turns < 1:
+        raise ValueError(f"max_turns must be > 0, got {config.max_turns}")
+
+
+def deny_permission(_tool_call: ToolCall) -> PermissionDecision:
+    """Deterministic denial callback for non-interactive runs.
+
+    Args:
+        _tool_call: Tool call requesting approval.
+
+    Returns:
+        A denial decision, used by delegated runs that cannot prompt.
+    """
+    return PermissionDecision.deny()
+
+
+def _make_callbacks(
+    budget: Budget,
+    hooks: Hooks,
+    permissions: Permissions,
+    tracer: Tracer | _NullTracer,
+    tool_registry: dict[str, Callable[..., str]],
+    max_output_chars: int,
+    show_output: bool,
+) -> LoopCallbacks:
+    def on_response(response: Response) -> None:
+        if show_output:
+            show_response(response)
+        tracer.record(
+            "turn",
+            stop_reason=response.stop_reason,
+            response=response.message.content,
+            input_tokens=response.usage.input_tokens,
+            output_tokens=response.usage.output_tokens,
+        )
+
+    def on_tool_call(tool_call: ToolCall) -> ToolResult:
+        if show_output:
+            show_tool_call(tool_call)
+        checked = hooks.run_before_tool(tool_call)
+        if checked is None:
+            tracer.record("tool_blocked", tool=tool_call.name, reason="safety_hook", args=tool_call.arguments)
+            result = ToolResult(tool_call_id=tool_call.id, error="Blocked by safety hook")
+            if show_output:
+                show_tool_result(result)
+            return result
+        if not permissions.check(checked):
+            tracer.record("tool_denied", tool=checked.name, reason="user_denied", args=checked.arguments)
+            result = ToolResult(tool_call_id=checked.id, error="Denied by user")
+            if show_output:
+                show_tool_result(result)
+            return result
+        tracer.record("tool_call", tool=checked.name, args=checked.arguments)
+        result = execute_tool(checked, max_output_chars=max_output_chars, tool_registry=tool_registry)
+        result = hooks.run_after_tool(checked, result)
+        tracer.record("tool_result", tool=checked.name, output=result.output, error=result.error)
+        if show_output:
+            show_tool_result(result)
+        return result
+
+    def on_budget(usage: Usage) -> bool:
+        exceeded = budget.record(usage)
+        if show_output:
+            show_budget(budget.summary())
+        tracer.record("budget", summary=budget.summary())
+        return exceeded
+
+    return LoopCallbacks(on_response=on_response, on_tool_call=on_tool_call, on_budget=on_budget)
+
+
+def prepare_runtime(
+    config: AgentConfig,
+    *,
+    permission_prompt_fn: PermissionPromptFn,
+    domain_prompt_fn: DomainPromptFn | None = None,
+    show_output: bool = True,
+    trace_enabled: bool = True,
+) -> PreparedRuntime:
+    """Prepare everything needed to execute an agent consistently.
+
+    Args:
+        config: Loaded agent configuration.
+        permission_prompt_fn: Callback used when a tool call needs approval.
+        domain_prompt_fn: Optional callback used by the network blocker to approve domains.
+        show_output: Whether response/tool panels should be rendered to the console.
+        trace_enabled: Whether structured trace files should be written.
+
+    Returns:
+        Prepared runtime object that can initialize messages, run the loop, and persist
+        permission state at the end of the session.
+    """
+    tool_context = ToolRuntimeContext(
+        memory_dir=f"{config.agent_dir}/memory",
+        tool_timeout=config.tool_timeout,
+        executor=config.executor,
+    )
+    tool_registry = build_tool_registry(tool_context)
+    discover_tools("tools", base_registry=tool_registry)
+    validate_config(config, tool_registry)
+
+    tracer: Tracer | _NullTracer
+    if trace_enabled:
+        tracer = Tracer(f"{config.agent_dir}/logs")
+        trace_context(tracer, config)
+    else:
+        tracer = _NullTracer()
+
+    hooks = Hooks(
+        config.hooks,
+        domain_prompt_fn=domain_prompt_fn,
+        agent_dir=config.agent_dir,
+        workspace_root=str(Path.cwd()),
+    )
+    permissions = Permissions(
+        config.permissions,
+        prompt_fn=permission_prompt_fn,
+        persist_path=f"{config.agent_dir}/.permissions.yaml",
+    )
+    permissions.load()
+    budget = Budget(config)
+    callbacks = _make_callbacks(
+        budget,
+        hooks,
+        permissions,
+        tracer,
+        tool_registry,
+        config.max_output_chars,
+        show_output,
+    )
+    chat_fn = provider_registry[config.provider]
+    loop_fn = loop_registry[config.loop]
+    tool_schemas = [generate_schema(tool_registry[name]) for name in config.tools]
+    return PreparedRuntime(
+        config=config,
+        chat_fn=chat_fn,
+        loop_fn=loop_fn,
+        tool_registry=tool_registry,
+        tool_schemas=tool_schemas,
+        callbacks=callbacks,
+        permissions=permissions,
+        tracer=tracer,
+    )

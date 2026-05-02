@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -13,17 +15,73 @@ from agent_harness.types import ToolCall
 
 logger = logging.getLogger(__name__)
 
-PromptFn = Callable[[ToolCall], bool]
+
+class ApprovalMode(StrEnum):
+    """Supported user approval modes for tool execution prompts."""
+
+    DENY = "deny"
+    ALLOW_ONCE = "allow_once"
+    ALLOW_SESSION = "allow_session"
+    ALLOW_PERSISTENT = "allow_persistent"
+
+
+@dataclass(frozen=True)
+class PermissionDecision:
+    """Normalized result from a permission prompt.
+
+    Attributes:
+        approved: Whether the tool call should proceed.
+        mode: How long the approval should be remembered.
+    """
+
+    approved: bool
+    mode: ApprovalMode
+
+    @classmethod
+    def deny(cls) -> PermissionDecision:
+        return cls(approved=False, mode=ApprovalMode.DENY)
+
+    @classmethod
+    def allow_once(cls) -> PermissionDecision:
+        return cls(approved=True, mode=ApprovalMode.ALLOW_ONCE)
+
+    @classmethod
+    def allow_session(cls) -> PermissionDecision:
+        return cls(approved=True, mode=ApprovalMode.ALLOW_SESSION)
+
+    @classmethod
+    def allow_persistent(cls) -> PermissionDecision:
+        return cls(approved=True, mode=ApprovalMode.ALLOW_PERSISTENT)
+
+
+PromptFn = Callable[[ToolCall], PermissionDecision | bool]
+
+
+def _normalize_decision(decision: PermissionDecision | bool) -> PermissionDecision:
+    """Normalize legacy boolean prompt results into explicit decisions.
+
+    Args:
+        decision: Prompt callback result.
+
+    Returns:
+        Explicit permission decision. Legacy `True` becomes session approval and
+        `False` becomes denial.
+    """
+    if isinstance(decision, PermissionDecision):
+        return decision
+    if decision:
+        return PermissionDecision.allow_session()
+    return PermissionDecision.deny()
 
 
 class Permissions:
-    """Tool approval with three tiers: always_allow, always_ask, session memory.
+    """Tool approval with three tiers: always_allow, always_ask, and remembered approvals.
 
     Inert by default — if no config is provided, all tools are allowed.
 
     Args:
         perm_config: Dict with optional 'always_allow' and 'always_ask' lists.
-        prompt_fn: Callback that asks the user for approval. Returns True if approved.
+        prompt_fn: Callback that asks the user for approval.
         persist_path: Optional path to save/load persistent permissions.
     """
 
@@ -40,6 +98,7 @@ class Permissions:
         self._session_approved: set[str] = set()
         self._persist_path = persist_path
         self._persistent_approved: set[str] = set()
+        self._dirty = False
 
     def check(self, tool_call: ToolCall) -> bool:
         """Check if a tool call is approved.
@@ -54,39 +113,51 @@ class Permissions:
             return True
 
         name = tool_call.name
-
         if name in self._always_allow:
             return True
 
         if name in self._always_ask:
-            approved = self._prompt_fn(tool_call)
-            logger.info("Tool %s: user %s", name, "approved" if approved else "denied")
-            return approved
+            decision = _normalize_decision(self._prompt_fn(tool_call))
+            logger.info("Tool %s: user %s", name, "approved" if decision.approved else "denied")
+            return decision.approved
 
-        # Default tier: check session/persistent memory, then ask once
-        if name in self._session_approved or name in self._persistent_approved:
+        if name in self._persistent_approved or name in self._session_approved:
             return True
 
-        approved = self._prompt_fn(tool_call)
-        if approved:
+        decision = _normalize_decision(self._prompt_fn(tool_call))
+        if not decision.approved:
+            logger.info("Tool %s: denied", name)
+            return False
+        if decision.mode is ApprovalMode.ALLOW_SESSION:
             self._session_approved.add(name)
-            logger.info("Tool %s: session-approved", name)
-        return approved
+        elif decision.mode is ApprovalMode.ALLOW_PERSISTENT:
+            self._persistent_approved.add(name)
+            self._dirty = True
+        logger.info("Tool %s: approved via %s", name, decision.mode.value)
+        return True
 
     def save(self) -> None:
-        """Save persistent permissions to disk."""
-        if not self._persist_path:
+        """Save persistent permissions to disk.
+
+        Does nothing if no persistence path was configured or no persistent approvals
+        changed during the current process.
+        """
+        if not self._persist_path or not self._dirty:
             return
         try:
             persist = Path(self._persist_path)
             persist.parent.mkdir(parents=True, exist_ok=True)
-            all_approved = sorted(self._session_approved | self._persistent_approved)
-            persist.write_text(yaml.dump({"approved": all_approved}))
+            approved = sorted(self._persistent_approved)
+            persist.write_text(yaml.dump({"approved": approved}))
+            self._dirty = False
         except OSError:
             logger.warning("Could not save permissions to %s", self._persist_path)
 
     def load(self) -> None:
-        """Load persistent permissions from disk."""
+        """Load persistent permissions from disk.
+
+        Missing files are treated as "no saved approvals".
+        """
         if not self._persist_path:
             return
         path = Path(self._persist_path)

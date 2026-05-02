@@ -80,8 +80,9 @@ Responsibilities:
 
 Provider registry (`providers/__init__.py`):
 ```python
-from agent_harness.providers import anthropic
-registry = {"anthropic": anthropic.chat}
+registry = {
+    "anthropic": lazy("agent_harness.providers.anthropic"),
+}
 ```
 
 ### 1.4 Config loader (`agent_harness/config.py`)
@@ -251,7 +252,11 @@ class Permissions:
 Three tiers:
 - `always_allow: [read_file, list_memories]` — never prompt for these
 - `always_ask: [run_command, execute_code]` — always prompt
-- Session memory: user approves once, remembered until exit
+- Prompt decision for tools in neither list:
+  - allow once
+  - allow for session
+  - allow persistently
+  - deny
 
 Persistent permissions saved to `{agent_dir}/.permissions.yaml`.
 
@@ -259,24 +264,17 @@ User prompt on tool call:
 ```
 Tool: run_command
 Args: {"command": "ls -la"}
-[a]llow once / allow for [s]ession / [d]eny?
+[o]nce / allow for [s]ession / allow [p]ersistently / [d]eny?
 ```
 
 ### 2.3 Wire hooks and permissions into cli.py
 
-Update `make_tool_handler` in cli.py to compose hooks and permissions:
+Use the shared runtime path to compose hooks and permissions once for both CLI runs and delegated sub-agent runs:
 
 ```python
-def make_tool_handler(hooks, permissions):
-    def handle(tool_call):
-        tool_call = hooks.run_before_tool(tool_call)
-        if tool_call is None:
-            return ToolResult(id, "", error="Blocked by safety hook")
-        if not permissions.check(tool_call):
-            return ToolResult(id, "", error="Denied by user")
-        result = execute_tool(tool_call)
-        return hooks.run_after_tool(tool_call, result)
-    return handle
+runtime = prepare_runtime(...)
+messages = runtime.init_messages(...)
+result = runtime.run_messages(messages, prompt="...")
 ```
 
 ### 2.4 Provider retry logic
@@ -300,8 +298,8 @@ Add to the anthropic provider (and later to others):
 1. `rm -rf /` in a run_command call is blocked by the dangerous_command_blocker hook
 2. File read with `../../etc/passwd` is blocked by path_traversal_detector
 3. Tool approval prompt appears for tools in the `always_ask` list
-4. Session approval works — approve once, not asked again that session
-5. Persistent permissions saved and loaded across sessions
+4. Session approval works — choose session, not asked again that session
+5. Persistent approval works — choose persistent, saved and loaded across sessions
 6. API rate limit error → retries and succeeds
 7. Invalid API key → clear error message on first call, not after 3 retries
 8. Log file created with readable entries for an agent run
@@ -315,11 +313,22 @@ Add to the anthropic provider (and later to others):
 
 ### 3.1 OpenAI provider (`agent_harness/providers/openai_provider.py`)
 
-**Already implemented in Phase 1** as `providers/openai_provider.py` using Chat Completions API.
+**Implemented** as one harness-facing OpenAI provider with internal endpoint routing.
 
-Remaining Phase 3 work:
-- LM Studio support: accept `base_url` from config kwargs, pass to OpenAI client
-- Test with local models (qwen3-4b-thinking-2507 available in LM Studio)
+Current behaviour:
+- Hosted OpenAI support targets these text models:
+  - `gpt-4o`
+  - `gpt-4o-mini`
+  - `gpt-5.4`
+  - `gpt-5.4-mini`
+  - `gpt-5.4-nano`
+  - `gpt-5.1`
+  - `gpt-5-mini`
+  - `gpt-5-nano`
+- Hosted OpenAI requests use the Responses API by default.
+- OpenAI-compatible backends configured with `base_url` continue to use Chat Completions for compatibility.
+- Unsupported hosted models fail clearly instead of silently taking the wrong path.
+- Older GPT-5 cheap tiers (`gpt-5-mini`, `gpt-5-nano`) default to minimal reasoning effort so small `max_tokens` limits still produce text output reliably.
 
 Config for LM Studio:
 ```yaml
@@ -329,27 +338,10 @@ provider_kwargs:
   base_url: "http://localhost:1234/v1"
 ```
 
-#### ⚠️ GPT-5 Responses API (future work)
-
-As of 2026, OpenAI is migrating from Chat Completions (`/v1/chat/completions`) to the
-Responses API (`/v1/responses`). Key impacts:
-
-1. **GPT-4o-mini is on the deprecation path** — retired from ChatGPT Feb 2026, API
-   retirement expected later in 2026.
-2. **GPT-5.4+ has dropped tool calling in Chat Completions** with `reasoning: none`.
-   Full tool calling for GPT-5 models requires the Responses API.
-3. **Responses API has a different shape**: typed response objects instead of messages,
-   different function calling format, `instructions` parameter instead of system message.
-4. **Performance**: Responses API gives ~3% better results on benchmarks and 40-80%
-   better cache utilisation for GPT-5 models.
-
-**Action**: When GPT-5 support is needed, add a new `providers/openai_responses.py`
-using the Responses API. The current Chat Completions provider remains correct for
-GPT-4 series models and OpenAI-compatible endpoints (LM Studio, Ollama, etc.).
-
-References:
-- https://developers.openai.com/api/docs/guides/migrate-to-responses
-- https://developers.openai.com/cookbook/examples/gpt-5/gpt-5_new_params_and_tools
+Implementation notes:
+- The provider keeps one small compatibility matrix for routing and parameter handling.
+- Tool calling is supported through both endpoint shapes and mapped back into the harness `Response`.
+- `o-series` reasoning models are intentionally out of scope for this provider target and are tracked separately.
 
 ### 3.2 Plan-execute loop (`agent_harness/loops/plan_execute.py`)
 
@@ -531,11 +523,11 @@ Each is a folder with `instructions.md`, `config.yaml`, and optionally `tools.md
 | `loops/common.py` | — | 65 | Shared loop utilities |
 | `config.py` | 1 | 78 | Load agent folder |
 | `budget.py` | 1 | 61 | Turn/cost tracking |
-| `hooks.py` | 2 | 201 | Safety hook chain + 4 pattern matchers |
+| `hooks.py` | 2 | 201 | Safety hook chain + path-aware validation |
 | `network.py` | 2 | 138 | Network blocker with domain whitelist |
-| `permissions.py` | 2 | 95 | Tool approval system |
-| `memory.py` | 4 | 60 | Long-term memory tools |
-| `routing.py` | 4 | 124 | Agent routing + handoff with depth limiting |
+| `permissions.py` | 2 | 95 | Tool approval system with explicit approval modes |
+| `memory.py` | 4 | 60 | Long-term memory helpers and tools |
+| `routing.py` | 4 | 124 | Agent routing + handoff with shared runtime |
 | `session.py` | 4 | 109 | Session save/load |
 | `context.py` | 3 | 99 | Context window trimming |
 | `scaffold.py` | 4 | 50 | Agent folder scaffolding |
@@ -543,11 +535,12 @@ Each is a folder with `instructions.md`, `config.yaml`, and optionally `tools.md
 | `display.py` | 1 | 66 | Rich console output |
 | `log.py` | 2 | 40 | Logging setup |
 | `trace.py` | 6 | 46 | Structured JSONL traces |
-| `cli.py` | 1 | 356 | Arg parsing, REPL, config overrides, composition root |
+| `runtime.py` | 4 | ~150 | Shared runtime setup for cli + sub-agents |
+| `cli.py` | 1 | ~150 | Arg parsing, REPL, config overrides, terminal entry point |
 | `__main__.py` | 1 | 5 | Entry point |
 | `__init__.py` | 1 | 3 | Package exports |
-| **Total runtime** | | **~2,980** | 33 source files |
-| **Total tests** | | **273** | |
+| **Total runtime** | | **~3,000** | 34 source files |
+| **Total tests** | | **292** | |
 
 ---
 
@@ -573,7 +566,7 @@ No other runtime dependencies. Test dependencies: `pytest`, `pytest-cov`, `ruff`
 
 Project-level custom tools in `tools/` directory. One Python file per tool, one public function with type hints and docstring.
 
-**Discovery:** At startup, `discover_tools("tools")` scans `tools/*.py`, imports each module, registers the first public function with a return type annotation. Built-in tools cannot be overwritten.
+**Discovery:** The shared runtime calls `discover_tools("tools")` during run preparation. It scans `tools/*.py`, imports each module, registers the first public function with a return type annotation, and keeps built-in tool names authoritative.
 
 **Access control:** Custom tools only available to an agent if listed in its `config.yaml` tools list. No auto-discovery into agent context.
 
@@ -595,67 +588,7 @@ skills/csv-analysis/
 
 ---
 
-## Backlog — Future Phases
-
-### Phase 7 — MCP Support
-
-Connect agents to external tools via [Model Context Protocol](https://modelcontextprotocol.io/). MCP is the emerging standard for tool integration — standardised connectors for Slack, GitHub, databases, file systems without writing custom tool functions.
-
-Scope: MCP client in the harness, config to point at MCP servers, tools auto-discovered from server capabilities.
-
-### Phase 8 — Async Execution
-
-Parallel tool calls and streaming responses. Requires asyncio refactor of the react loop and provider chat functions. Would enable running multiple tools concurrently when the LLM requests them in one response.
-
-### Phase 9 — Streaming Responses
-
-Stream LLM output token-by-token for better UX on long responses. Requires provider-level streaming support and display updates.
-
-### Phase 10 — Evaluation Framework
-
-Run agents against test cases and score quality. Can be approximated today by scripting CLI runs and comparing output. A formal framework would add: test case definitions (input/expected), scoring functions, regression detection.
-
-### Phase 11 — Model Fallback Chains
-
-If primary provider fails (rate limit, outage), try a fallback provider before giving up. Config-driven, ~20 lines in the loop. Inspired by OpenClaw's model failover with circuit breaker.
-
-```yaml
-provider: anthropic
-model: claude-haiku-4-5-20251001
-fallback:
-  provider: openai
-  model: gpt-4o-mini
-```
-
-### Phase 12 — Self-Improving Skills
-
-After a successful multi-step task, the agent can save the approach as a reusable skill in `{agent_dir}/skills/`. Next time a similar task comes up, the skill is loaded into context. Just save_memory with a convention — the LLM decides when to save. Inspired by Hermes Agent's skills system.
-
-### Phase 13 — Lazy Tool Schema Loading
-
-Instead of injecting all tool schemas into every prompt, send a compact list (name + description). The LLM picks which tools it needs, full schemas loaded on demand. Reduces token waste when agents have many tools. Only relevant when tool count exceeds ~15.
-
-### Phase 14 — Identity/Procedure Split
-
-Optional `identity.md` file in agent folder — prepended before `instructions.md`. Separates "who you are" from "what you do". Useful for agents that share an identity but have different procedures. ~5 lines in config.py. Inspired by OpenClaw's SOUL.md/AGENTS.md split.
-
-### Phase 15 — Immutable Trace with Hash Chain
-
-Add hash chaining to trace events — each entry includes the hash of the previous entry. Makes traces tamper-evident without requiring a database. ~10 lines in trace.py. Inspired by Paperclip's append-only audit log.
-
-### Phase 16 — Per-Task Cost Attribution
-
-Add `task_id` to trace events and budget.record(). Enables summing cost by task for reporting. ~10 lines. Inspired by Paperclip's granular cost tracking.
-
-### Considering — Decision-Level Approval Gates
-
-Beyond per-tool permissions, approve by decision severity. Could work as a `before_decision` hook that checks decision type (e.g. "this agent wants to delegate to another agent" vs "this agent wants to read a file"). Worth exploring if multi-agent orchestration becomes a primary use case. Inspired by Paperclip's governance model.
-
-### Considering — Shared Workspace Communication
-
-A `workspace/` directory convention for multi-agent file-based coordination. Agents read/write shared files instead of fire-and-forget `run_agent` calls. Enables richer collaboration without framework changes — just a directory and instructions.md guidance. Inspired by Paperclip's shared workspace.
-
-### Implemented Loop Patterns
+## Implemented Loop Patterns
 
 All implemented. See `docs/agentic-design-patterns.md` for diagrams.
 
@@ -666,12 +599,4 @@ All implemented. See `docs/agentic-design-patterns.md` for diagrams.
 - `loops/debate.py` — Debate: two perspectives argue N rounds, synthesiser reconciles
 - `routing.py:handoff_agent` — Handoff: pass existing messages to sub-agent
 
-### Backlog — Remaining Patterns
-
-**Script wrappers (no framework changes):**
-- Parallelization (Fan-out/Fan-in) — shell `&` + `wait`, then synthesiser agent.
-- Consensus/Voting — N agents in parallel on same task, judge agent compares.
-
-**Needs async (Phase 8 prerequisite):**
-- Tree-of-Thoughts (~100 lines) — multiple concurrent LLM calls with branching/pruning.
-- LATS (~200 lines) — Monte Carlo Tree Search over agent reasoning. Research-grade.
+For future loop patterns and other unshipped work, see `docs/roadmap.md`.

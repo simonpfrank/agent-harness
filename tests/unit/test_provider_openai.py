@@ -5,6 +5,9 @@ from unittest.mock import MagicMock, patch
 import openai
 
 from agent_harness.providers.openai_provider import (
+    _build_create_kwargs,
+    _response_endpoint_for_model,
+    _to_openai_input,
     _to_openai_messages,
     _to_openai_tools,
     _to_response,
@@ -55,6 +58,38 @@ class TestToOpenaiMessages:
         msgs = [Message(role="tool", tool_result=tr)]
         result = _to_openai_messages(msgs)
         assert result[0]["content"] == "not found"
+
+
+class TestToOpenaiInput:
+    def test_converts_system_message_to_instructions(self) -> None:
+        messages = [
+            Message(role="system", content="You are helpful"),
+            Message(role="user", content="hello"),
+        ]
+
+        instructions, input_items = _to_openai_input(messages)
+
+        assert instructions == "You are helpful"
+        assert input_items == [{"role": "user", "content": "hello"}]
+
+    def test_converts_assistant_tool_calls_and_tool_output(self) -> None:
+        tool_call = ToolCall(id="call_1", name="read_file", arguments={"path": "foo.txt"})
+        tool_result = ToolResult(tool_call_id="call_1", output="contents")
+        messages = [
+            Message(role="assistant", content="Checking", tool_calls=[tool_call]),
+            Message(role="tool", tool_result=tool_result),
+        ]
+
+        _, input_items = _to_openai_input(messages)
+
+        assert input_items[0]["type"] == "function_call"
+        assert input_items[0]["call_id"] == "call_1"
+        assert input_items[0]["name"] == "read_file"
+        assert input_items[1] == {
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": "contents",
+        }
 
 
 class TestToOpenaiTools:
@@ -145,6 +180,115 @@ class TestToResponse:
         assert response.stop_reason == "tool_use"  # we detect from tool_calls presence
         assert response.message.tool_calls is not None
 
+    def test_responses_api_text_response(self) -> None:
+        output_text = MagicMock()
+        output_text.type = "output_text"
+        output_text.text = "Hello"
+
+        output_message = MagicMock()
+        output_message.type = "message"
+        output_message.content = [output_text]
+
+        mock_resp = MagicMock()
+        mock_resp.output = [output_message]
+        mock_resp.usage.input_tokens = 12
+        mock_resp.usage.output_tokens = 7
+        mock_resp.choices = None
+
+        response = _to_response(mock_resp)
+        assert response.message.content == "Hello"
+        assert response.message.tool_calls is None
+        assert response.stop_reason == "end_turn"
+
+    def test_responses_api_function_call_response(self) -> None:
+        function_call = MagicMock()
+        function_call.type = "function_call"
+        function_call.call_id = "call_1"
+        function_call.name = "run_command"
+        function_call.arguments = '{"command": "pwd"}'
+
+        mock_resp = MagicMock()
+        mock_resp.output = [function_call]
+        mock_resp.usage.input_tokens = 20
+        mock_resp.usage.output_tokens = 5
+        mock_resp.choices = None
+
+        response = _to_response(mock_resp)
+        assert response.message.tool_calls is not None
+        assert response.message.tool_calls[0].id == "call_1"
+        assert response.message.tool_calls[0].name == "run_command"
+        assert response.message.tool_calls[0].arguments == {"command": "pwd"}
+        assert response.stop_reason == "tool_use"
+
+
+class TestEndpointRouting:
+    def test_gpt_5_models_use_responses_api(self) -> None:
+        assert _response_endpoint_for_model("gpt-5.4") == "responses"
+        assert _response_endpoint_for_model("gpt-5-mini") == "responses"
+        assert _response_endpoint_for_model("gpt-5-nano") == "responses"
+
+    def test_gpt_4o_models_use_responses_api(self) -> None:
+        assert _response_endpoint_for_model("gpt-4o") == "responses"
+        assert _response_endpoint_for_model("gpt-4o-mini") == "responses"
+
+    def test_excluded_o_series_model_is_rejected(self) -> None:
+        try:
+            _response_endpoint_for_model("o4-mini")
+            raise AssertionError("Should have raised")
+        except ValueError as exc:
+            assert "unsupported" in str(exc).lower()
+
+
+class TestCreateKwargs:
+    def test_builds_responses_kwargs_for_gpt_5_model(self) -> None:
+        instructions, input_items = _to_openai_input([Message(role="user", content="hi")])
+        kwargs = _build_create_kwargs(
+            model="gpt-5.4-mini",
+            instructions=instructions,
+            input_items=input_items,
+            tools=[],
+            temperature=None,
+            max_tokens=123,
+            top_p=None,
+        )
+
+        assert kwargs["model"] == "gpt-5.4-mini"
+        assert kwargs["input"] == [{"role": "user", "content": "hi"}]
+        assert kwargs["max_output_tokens"] == 123
+        assert "messages" not in kwargs
+        assert "reasoning" not in kwargs
+
+    def test_older_gpt_5_nano_defaults_to_minimal_reasoning(self) -> None:
+        instructions, input_items = _to_openai_input([Message(role="user", content="hi")])
+        kwargs = _build_create_kwargs(
+            model="gpt-5-nano",
+            instructions=instructions,
+            input_items=input_items,
+            tools=[],
+            temperature=None,
+            max_tokens=123,
+            top_p=None,
+        )
+
+        assert kwargs["reasoning"] == {"effort": "minimal"}
+
+    def test_builds_responses_kwargs_for_gpt_4o_model(self) -> None:
+        instructions, input_items = _to_openai_input([Message(role="user", content="hi")])
+        kwargs = _build_create_kwargs(
+            model="gpt-4o-mini",
+            instructions=instructions,
+            input_items=input_items,
+            tools=[],
+            temperature=0.0,
+            max_tokens=123,
+            top_p=0.5,
+        )
+
+        assert kwargs["temperature"] == 0.0
+        assert kwargs["top_p"] == 0.5
+        assert kwargs["max_output_tokens"] == 123
+        assert kwargs["input"] == [{"role": "user", "content": "hi"}]
+
 
 class TestChat:
     @patch("agent_harness.providers.openai_provider._get_client")
@@ -162,7 +306,7 @@ class TestChat:
         mock_response.choices = [choice]
         mock_response.usage.prompt_tokens = 10
         mock_response.usage.completion_tokens = 5
-        mock_client.chat.completions.create.return_value = mock_response
+        mock_client.responses.create.return_value = mock_response
 
         msgs = [
             Message(role="system", content="be helpful"),
@@ -170,7 +314,7 @@ class TestChat:
         ]
         result = chat(msgs, tools=[], model="gpt-4o-mini")
         assert result.message.content == "hi"
-        mock_client.chat.completions.create.assert_called_once()
+        mock_client.responses.create.assert_called_once()
 
     @patch("agent_harness.providers.openai_provider._get_client")
     @patch("agent_harness.providers.retry.time.sleep")
@@ -193,11 +337,11 @@ class TestChat:
         success.choices = [choice]
         success.usage.prompt_tokens = 10
         success.usage.completion_tokens = 5
-        mock_client.chat.completions.create.side_effect = [rate_error, success]
+        mock_client.responses.create.side_effect = [rate_error, success]
 
         result = chat([Message(role="user", content="hi")], tools=[])
         assert result.message.content == "ok"
-        assert mock_client.chat.completions.create.call_count == 2
+        assert mock_client.responses.create.call_count == 2
 
     @patch("agent_harness.providers.openai_provider._get_client")
     def test_passes_temperature_and_max_tokens(self, mock_get_client: MagicMock) -> None:
@@ -210,7 +354,7 @@ class TestChat:
         mock_response.choices = [choice]
         mock_response.usage.prompt_tokens = 1
         mock_response.usage.completion_tokens = 1
-        mock_client.chat.completions.create.return_value = mock_response
+        mock_client.responses.create.return_value = mock_response
 
         chat(
             [Message(role="user", content="hi")],
@@ -220,17 +364,28 @@ class TestChat:
             max_tokens=1234,
             top_p=0.5,
         )
-        call_kwargs = mock_client.chat.completions.create.call_args.kwargs
+        call_kwargs = mock_client.responses.create.call_args.kwargs
         assert call_kwargs["temperature"] == 0.0
-        assert call_kwargs["max_tokens"] == 1234
+        assert call_kwargs["max_output_tokens"] == 1234
         assert call_kwargs["top_p"] == 0.5
 
     @patch("agent_harness.providers.openai_provider._get_client")
-    def test_reasoning_model_drops_temperature_and_renames_max_tokens(
+    def test_excluded_model_fails_clearly(
         self, mock_get_client: MagicMock,
     ) -> None:
-        """o-series reasoning models reject temperature/top_p and use
-        max_completion_tokens instead of max_tokens."""
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+
+        try:
+            chat([Message(role="user", content="hi")], tools=[], model="o4-mini")
+            raise AssertionError("Should have raised")
+        except ValueError as exc:
+            assert "unsupported" in str(exc).lower()
+        mock_client.responses.create.assert_not_called()
+        mock_client.chat.completions.create.assert_not_called()
+
+    @patch("agent_harness.providers.openai_provider._get_client")
+    def test_custom_base_url_uses_chat_completions(self, mock_get_client: MagicMock) -> None:
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
         choice = MagicMock()
@@ -242,19 +397,16 @@ class TestChat:
         mock_response.usage.completion_tokens = 1
         mock_client.chat.completions.create.return_value = mock_response
 
-        chat(
+        result = chat(
             [Message(role="user", content="hi")],
             tools=[],
-            model="o4-mini",
-            temperature=0.0,
-            top_p=0.5,
-            max_tokens=1234,
+            model="qwen3-4b-thinking-2507",
+            base_url="http://localhost:1234/v1",
         )
-        call_kwargs = mock_client.chat.completions.create.call_args.kwargs
-        assert "temperature" not in call_kwargs
-        assert "top_p" not in call_kwargs
-        assert "max_tokens" not in call_kwargs
-        assert call_kwargs["max_completion_tokens"] == 1234
+
+        assert result.message.content == "ok"
+        mock_client.chat.completions.create.assert_called_once()
+        mock_client.responses.create.assert_not_called()
 
     @patch("agent_harness.providers.openai_provider._get_client")
     def test_auth_error_fails_immediately(self, mock_get_client: MagicMock) -> None:
@@ -267,11 +419,11 @@ class TestChat:
         auth_error = openai.AuthenticationError(
             message="bad key", response=error_response, body=None,
         )
-        mock_client.chat.completions.create.side_effect = auth_error
+        mock_client.responses.create.side_effect = auth_error
 
         try:
             chat([Message(role="user", content="hi")], tools=[])
             raise AssertionError("Should have raised")
         except RuntimeError as exc:
             assert "API key" in str(exc) or "authentication" in str(exc).lower()
-        assert mock_client.chat.completions.create.call_count == 1
+        assert mock_client.responses.create.call_count == 1

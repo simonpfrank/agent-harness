@@ -6,25 +6,7 @@ When an item ships, move it to the **Done** section at the bottom with a commit 
 
 ---
 
-## Open
-
-### OpenAI GPT-5.x models — test and adjust provider (added 2026-04-15)
-
-**What:** Support OpenAI's current flagship family (`gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano` — whatever the current names are at the time of implementation) in the agent harness, and test them on the column-matching experiment.
-
-**Why:** Round 1 of the column-matching experiment (see `docs/matcher_experiments.md`) compared Haiku 4.5 vs gpt-4o vs gpt-4o-mini. Haiku hit 11/11 deterministically; the gpt-4o family flatlined at 5/11. That may be a gpt-4o-specific limitation. The 5.x family is the modern OpenAI equivalent of Haiku's tier and is the fair comparison.
-
-**Known gaps:**
-- `agent_harness/budget.py` COST_TABLE has no entries for any gpt-5 model — cost would log as $0.
-- `agent_harness/providers/openai_provider.py` has no model-specific branching; unclear if 5.x accepts the same kwargs we send today (`temperature`, `max_tokens`, `top_p`). Some current-gen models require `max_completion_tokens` instead of `max_tokens`.
-
-**Work:**
-1. Confirm current model IDs and pricing from OpenAI's pricing page.
-2. Add cost-table entries.
-3. If the API rejects our kwargs, extend the provider's kwarg allowlist per-model (see the reasoning-model item below for a parallel pattern).
-4. Run H1p3 config from the matcher experiments on the 5.x-mini or -nano tier. Compare to Haiku 4.5.
-
-**Definition of done:** 5 runs on a 5.x model logged in `docs/matcher_experiments.md` results table with real cost and accuracy, plus a paragraph in Findings answering "did 5.x close the gap or not".
+## Near-term Improvements
 
 ### Investigate o4-mini run-1 abort (added 2026-04-15)
 
@@ -38,42 +20,129 @@ When an item ships, move it to the **Done** section at the bottom with a commit 
 3. Add a regression test.
 
 ---
-
-### OpenAI reasoning models (o1/o3/o4) — provider support (added 2026-04-15, partially done)
-
-**Status:** o4-mini is working — provider detects `o1`/`o3`/`o4` prefix, drops `temperature`/`top_p`, renames `max_tokens` → `max_completion_tokens`. Shipped in a commit following `49e0799`. Remaining: `reasoning_effort` parameter plumbing and a `max_completion_tokens` default higher than our current `max_tokens=4096`.
-
-**What:** Support OpenAI's reasoning models in the harness.
-
-**Why:** Open question from the matcher experiment: is reasoning the lever, or is it vendor instruction-following style? gpt-4o flatlined at 5/11; Haiku hit 11/11. Running the same prompt on `o4-mini` (or similar) would tell us whether a reasoning-style model bridges the gap or whether the vendor-level tool-literal pattern persists regardless of reasoning.
-
-**Known gaps:**
-- Reasoning models reject `temperature` and `top_p` — current provider always forwards them if set.
-- They use `max_completion_tokens` instead of `max_tokens`.
-- They accept `reasoning_effort: low|medium|high`, which we have no plumbing for.
-- No cost-table entries.
-
-**Work:**
-1. Detect model by prefix (`o1`, `o3`, `o4`) in `openai_provider.py`.
-2. For reasoning models, drop `temperature`/`top_p` from `create_kwargs`, rename `max_tokens` → `max_completion_tokens`, and optionally accept a `reasoning_effort` kwarg.
-3. Unit test: passing `temperature` to a reasoning model must silently drop it, not error.
-4. Cost-table entries for the picked models.
-5. Run H1p3 on the chosen reasoning model; update `docs/matcher_experiments.md` Findings with the reasoning-vs-vendor-style answer.
-
-**Definition of done:** A small integration test hitting a real reasoning model succeeds; one reasoning-model row appended to the matcher experiment results table with interpretation.
-
-### Harness: path-traversal hook false-positive (added 2026-04-09 approx, still open)
-
-The `path_traversal_detector` hook inspects all tool-argument string values for `".."` and blocks the call. It fired on an `execute_code` run during one of the earlier column-matcher reflection experiments because the agent-generated Python string contained `..` (e.g. `"Birth..confirmation"`). The tight prompt currently avoids `execute_code`, so this hasn't recurred — but the hook's current shape can false-positive on any tool that takes free-form text.
-
-**Fix direction:** scope the check to arguments that are documented as paths (name-based allowlist from the tool's schema), not "every string anywhere in the call".
-
 ### Harness: react loop turn/budget awareness (added 2026-04-09 approx, still open)
 
 The react loop does not tell the model how many turns or how much budget remain. Models happily wander through 6–10 turns with no pressure to converge. A small "You have N turns / $X remaining" line injected into the system prompt at each turn would let the model self-regulate.
 
 ---
 
+## Plausible Future Capabilities
+
+### CLI streaming (added 2026-04-16)
+
+**Status:** Active roadmap design
+
+**What:** Stream model output progressively in the CLI while keeping the design reusable for a later API if one is ever built.
+
+**Why:** This gives immediate CLI feedback on slow runs and prepares a clean event seam for any future external consumer without forcing the whole harness async.
+
+**Scope in roadmap terms:** keep the core sync-first, start with CLI value, and avoid invasive contract changes unless they are clearly justified.
+
+**Deep-dive design:** `docs/streaming-plan.md`
+
+### Parallel sub-agent fan-out (added 2026-04-16)
+
+**Status:** Active roadmap design
+
+**What:** Run multiple delegated agents in parallel, primarily for fan-out / adjudication workflows and execution-time improvements.
+
+**Why:** This is the most plausible parallelism win for the harness. It may improve wall-clock time and unlock useful experimentation patterns without pushing concurrency into every part of the runtime.
+
+**Scope in roadmap terms:** sub-agent fan-out first, not parallel tool calls inside a single turn.
+
+**Deep-dive design:** `docs/streaming-plan.md`
+
+### API / async boundary (added 2026-04-16)
+
+**Status:** Active roadmap design
+
+**What:** If an external API is ever added, keep async at the boundary and avoid pre-emptively converting the harness core.
+
+**Why:** Async is a means to an end, not a feature. The main value would be serving external consumers cleanly, not making the core more complex.
+
+**Scope in roadmap terms:** API later, boundary-first async only, sync core by default.
+
+**Deep-dive design:** `docs/streaming-plan.md`
+
+### MCP support (added 2026-04-16)
+
+Connect agents to external tools via [Model Context Protocol](https://modelcontextprotocol.io/). Scope: MCP client in the harness, config to point at MCP servers, tools auto-discovered from server capabilities.
+
+### Evaluation framework (added 2026-04-16)
+
+Run agents against test cases and score quality. A formal framework would add test case definitions, scoring functions, and regression detection beyond scripted CLI runs.
+
+### Lazy tool schema loading (added 2026-04-16)
+
+Send a compact list of tool names and descriptions first, then load full schemas on demand only when the model chooses a tool.
+
+---
+
+## Ideas
+
+These are captured so they are not lost. They are not commitments.
+
+### Identity / procedure split (added 2026-04-16)
+
+Optional `identity.md` before `instructions.md` to separate "who the agent is" from "what it should do".
+
+### Model fallback chains (added 2026-04-16)
+
+If the primary provider fails, try a fallback provider before giving up. Keep it config-driven and small if it is ever built.
+
+### Self-improving skills (added 2026-04-16)
+
+After a successful multi-step task, the agent can save the approach as a reusable skill in `{agent_dir}/skills/` and reload it later by convention.
+
+### Immutable trace hash chain (added 2026-04-16)
+
+Make traces tamper-evident by including the previous event hash in each trace entry.
+
+### Per-task cost attribution (added 2026-04-16)
+
+Add `task_id` to trace and budget events so cost can be summed by task later.
+
+### Decision-level approval gates (added 2026-04-16)
+
+Explore approvals by decision severity, not just by tool, if multi-agent orchestration becomes important enough to justify it.
+
+### Shared workspace communication (added 2026-04-16)
+
+Use a `workspace/` directory convention for multi-agent file-based coordination instead of only fire-and-forget delegation calls.
+
+### Agentic patterns backlog (added 2026-04-16)
+
+Compact index entry for unshipped coordination patterns. Script-level fan-out/fan-in and consensus remain possible without framework changes; more advanced branching patterns such as Tree-of-Thoughts and LATS stay explicitly future work until there is a strong reason to pay their complexity cost.
+
+---
+
 ## Done
 
-(empty — move items here with commit ref + date when they ship)
+### Harness: path-traversal hook false-positive (resolved 2026-04-16)
+
+The `path_traversal_detector` now validates path-like argument names (`path`, `working_dir`, `directory`, `file_path`) against the workspace root instead of scanning every string argument for `".."`. This removes the known false-positive on free-form code/text while keeping path checks deterministic.
+
+### OpenAI provider hardening for supported text models (resolved 2026-04-16)
+
+The OpenAI provider now supports the selected hosted text model set (`gpt-4o`, `gpt-4o-mini`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.4-nano`, `gpt-5.1`, `gpt-5-mini`, `gpt-5-nano`) through one harness-facing provider. Hosted OpenAI requests use Responses by default, OpenAI-compatible `base_url` backends keep Chat Completions for compatibility, GPT-5 cost/context metadata is present, and representative live integration tests passed on the host. `o4-mini` abort investigation remains separate.
+
+---
+
+## Roadmap Filter
+
+Any new feature idea must provide a clear benefit before it belongs in this roadmap.
+
+A feature should improve at least one of:
+
+- user value for someone using the harness
+- quality of agent outcomes
+- execution time or feedback speed
+- reliability, safety, or debuggability
+- a concrete future capability without premature complexity
+
+It should also pass this test:
+
+- the benefit is greater than the added complexity
+- it preserves the harness as simple, elegant, and easy to reason about
+
+If an item cannot state a real benefit clearly, keep it in `Ideas` or do not add it.

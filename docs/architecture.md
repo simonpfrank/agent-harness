@@ -25,13 +25,14 @@ agent_harness/
   routing.py           # agent-as-tool with depth limiting
   session.py           # save/load conversation sessions as JSON
   context.py           # context window trimming
+  runtime.py           # shared runtime setup for cli + sub-agents
   scaffold.py          # agent folder scaffolding (init command)
   display.py           # rich console output
   log.py               # console + file logging setup
   trace.py             # structured JSONL trace per run
-  cli.py               # cli arg parsing, repl, composition root
+  cli.py               # cli arg parsing and terminal entry point
   providers/
-    __init__.py        # provider registry (a dict)
+    __init__.py        # lazy provider registry
     anthropic.py       # chat() for claude
     openai_provider.py # chat() for openai-compatible apis (inc. lm studio)
   loops/
@@ -88,9 +89,12 @@ This is the constraint that keeps the project from rotting. Read as "X knows abo
 
                display.py ──> types.py
 
-               cli.py ──> config.py
-                      ──> loops/ (to pick a loop)
-                      ──> display.py
+               runtime.py ──> config.py
+                          ──> tools.py
+                          ──> loops/
+                          ──> providers/*
+
+               cli.py / routing.py ──> runtime.py
 ```
 
 ### Dependency Matrix
@@ -98,7 +102,7 @@ This is the constraint that keeps the project from rotting. Read as "X knows abo
 Each row imports from the columns marked `x`. `.` means "uses through callbacks, not direct import."
 
 ```
-                  types  config  tools  loops  display  (everything else)
+                  types  config  tools  loops  runtime  display  (everything else)
 types.py           -
 config.py          x       -
 tools.py           x              -
@@ -109,19 +113,22 @@ memory.py          x
 display.py         x
 providers/*.py     x
 loops/*.py         x              x
-cli.py             .       x      .      x       x
+runtime.py         .       x      x      x       - 
+cli.py             .       .      .      .       x
+routing.py         .       .      .      .       x
 ```
 
 Key points:
 - **types.py imports nothing internal.** It's the root of everything.
 - **Every feature file imports exactly one internal module: types.py.**
 - **Loop files import exactly two: types.py and tools.py.**
-- **cli.py is the composition root** — it wires things together through callbacks. It directly imports config, loops, and display. Everything else it touches through objects or function references.
+- **runtime.py is the shared composition layer** — it builds the system prompt, per-run tool registry, hooks, permissions, tracing, and loop callbacks once.
+- **cli.py and routing.py are thin entry points** over the same runtime path, so delegated agents behave like standalone agents.
 - **No circular dependencies.** The graph is a star with types.py at the centre.
 
 ### What "flat" means in practice
 
-Every feature module (budget, hooks, permissions, memory) is **inert by default**. A 5-line `config.yaml` with just name, provider, model, and tools gives you a working agent. The Budget object exists but never triggers. The Hooks object passes everything through. The Permissions object allows everything. No conditionals, no None checks — the objects are always present, they just do nothing unless activated by config.
+Every feature module (budget, hooks, permissions, memory) is **inert by default**. A 5-line `config.yaml` with just name, provider, model, and tools gives you a working agent. The runtime still builds Budget, Hooks, and Permissions on every run, but they remain no-op until config activates them.
 
 Add `max_cost: 0.50` to config and the budget activates. Add `hooks: [dangerous_command_blocker]` and that hook activates. The complexity is opt-in, one line at a time.
 
@@ -196,15 +203,15 @@ def chat(messages: list[Message], tools: list[dict], **kwargs) -> Response:
 
 It translates our `Message` objects to the provider's wire format, calls the API, and translates back to `Response`. Each provider handles its own schema differences internally (e.g. Anthropic uses `input_schema` where OpenAI uses `parameters`).
 
-**Provider registry** (`providers/__init__.py`) is a dict:
+**Provider registry** (`providers/__init__.py`) is a lazy dict:
 ```python
 registry: dict[str, Callable] = {
-    "anthropic": anthropic.chat,
-    "openai": openai.chat,
+    "anthropic": lazy("agent_harness.providers.anthropic"),
+    "openai": lazy("agent_harness.providers.openai_provider"),
 }
 ```
 
-LM Studio gets free support through the OpenAI provider with a `base_url` override in config. No separate provider needed.
+LM Studio gets free support through the OpenAI provider with a `base_url` override in config. No separate provider needed. Unused provider SDKs are not imported until that provider is selected.
 
 **To add a provider**: write one file, implement `chat()`, add one line to the registry dict. No other files change.
 
@@ -214,16 +221,16 @@ Three responsibilities:
 
 1. **Schema generation**: Inspect a Python function's signature and docstring to produce JSON Schema tool definitions (following the OpenAI/Anthropic convention). Uses `inspect.signature` and `typing.get_type_hints`.
 
-2. **Registry**: A `dict[str, Callable]` mapping tool names to functions.
+2. **Registry**: A `dict[str, Callable]` mapping tool names to functions. Built-ins are created per run from a tiny runtime context rather than reading mutable module globals.
 
 3. **Built-in tools**:
    - `run_command(command: str) -> str` — split safely with `shlex.split()`, subprocess with no shell=True
    - `read_file(path: str) -> str` — read a file
    - `write_file(path: str, content: str) -> str` — write a file
    - `execute_code(code: str, language: str) -> str` — run python/bash with timeout
-   - `save_memory(key: str, content: str) -> str` — write to memory/ folder
-   - `recall_memory(key: str) -> str` — read from memory/ folder
-   - `list_memories() -> str` — list saved memory keys
+   - `save_memory(key: str, content: str) -> str` — write to that run's memory folder
+   - `recall_memory(key: str) -> str` — read from that run's memory folder
+   - `list_memories() -> str` — list saved memory keys for that run
    - `run_agent(agent_name: str, message: str) -> str` — invoke another agent (enables routing)
 
 **To add a tool**: write a function with type hints and a docstring. Register it. No other files change.
@@ -330,35 +337,37 @@ If embedding-based retrieval is needed later, it's added as another tool (`recal
 
 ### Routing
 
-Routing is not a module. It emerges from things that already exist:
+Routing is not a separate framework subsystem. It emerges from things that already exist:
 
-1. **`run_agent` tool**: One agent invokes another by name. The function loads the agent folder and runs it.
+1. **`run_agent` tool**: One agent invokes another by name. The function loads the agent folder and runs it through the same shared runtime path used by the CLI.
 2. **`instructions.md`**: The orchestrator's instructions say when to delegate. ("For research tasks, use the researcher agent. For data questions, use the csv-analyser.")
 3. **Hooks**: `before_tool_exec` can intercept and reroute deterministically (e.g. if a file path ends in `.csv`, redirect to the data agent).
 
-Multi-hop routing (A → B → C) works because each agent is independent. All routing decisions are visible in the tool call log.
+Multi-hop routing (A → B → C) works because each agent is independent. All routing decisions are visible in the tool call log. Delegated agents receive the same prompt assembly rules as standalone runs: `instructions.md`, optional `tools.md`, shared skills, and agent-local skills.
 
 ### Display (`display.py`)
 
 Rich console output. Shows assistant responses as markdown, tool calls with arguments, tool results, and budget status. Provides the user input prompt. ~40 lines.
 
-### CLI and REPL (`cli.py`)
+### Runtime + CLI (`runtime.py`, `cli.py`)
 
-The **composition root** — the one file that wires everything together.
+`runtime.py` is the shared execution setup layer. `cli.py` is a thin terminal entry point over it.
 
 ```
-parse args (agent_dir, optional prompt)
 load config from agent folder
-get provider from registry
-get loop from registry
-create budget, hooks, permissions
+apply overrides
+build a per-run tool registry
+build system prompt
+create budget, hooks, permissions, tracer
 compose them into callbacks
 
 if prompt given:
-    single command mode — run loop once, print result
+    single command mode — run loop once
 else:
     repl mode — input() loop until exit
 ```
+
+`routing.py` reuses the same runtime path with console output and prompting disabled, so sub-agents do not fork a second execution model.
 
 This is where budget, hooks, and permissions get composed into the `on_tool_call` callback:
 
@@ -488,7 +497,7 @@ OnBudget = Callable[[Usage], bool]  # returns True if budget exceeded
 Rules that prevent complexity creep. If code violates them, it gets refactored.
 
 1. **types.py imports nothing internal.** It's the root. If it starts importing things, the architecture is broken.
-2. **No file imports more than 2 internal modules.** cli.py gets a limited exemption as the composition root. If you need a third import, you're building a layer — stop and reconsider.
+2. **No file imports more than 2 internal modules.** `runtime.py` gets a limited exemption as the shared composition layer. If another file needs a third import, you're building a layer — stop and reconsider.
 3. **Providers know only types.** A provider file imports types.py and its SDK. Nothing else from the project.
 4. **Loops know only types and tools.** Everything else arrives as callbacks.
 5. **Growth through addition.** Adding a provider, tool, loop, or agent touches at most one existing file (the relevant registry). If a contribution requires changing two or more existing files, the design is wrong.

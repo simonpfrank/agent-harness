@@ -3,7 +3,7 @@
 import os
 import tempfile
 
-from agent_harness.permissions import Permissions
+from agent_harness.permissions import PermissionDecision, Permissions
 from agent_harness.types import ToolCall
 
 
@@ -107,11 +107,19 @@ class TestPersistentPermissions:
     def test_save_and_load(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = os.path.join(tmpdir, ".permissions.yaml")
-            perms = Permissions({}, prompt_fn=lambda tc: True, persist_path=path)
+            perms = Permissions(
+                {"always_allow": ["read_file"]},
+                prompt_fn=lambda tc: PermissionDecision.allow_persistent(),
+                persist_path=path,
+            )
             perms.check(_tool_call("run_command"))  # approve and persist
             perms.save()
 
             # New instance loads persisted permissions
-            perms2 = Permissions({}, prompt_fn=lambda tc: False, persist_path=path)
+            perms2 = Permissions(
+                {"always_allow": ["read_file"]},
+                prompt_fn=lambda tc: PermissionDecision.deny(),
+                persist_path=path,
+            )
             perms2.load()
             assert perms2.check(_tool_call("run_command")) is True  # loaded, no prompt

@@ -1,6 +1,6 @@
 """Tests for agent_harness.budget."""
 
-from agent_harness.budget import Budget
+from agent_harness.budget import COST_TABLE, Budget
 from agent_harness.types import AgentConfig, Usage
 
 
@@ -55,3 +55,23 @@ class TestBudgetSummary:
         summary = budget.summary()
         assert "1" in summary  # turn count
         assert "$" in summary  # cost
+
+
+class TestSupportedOpenAICosts:
+    def test_supported_openai_models_have_cost_entries(self) -> None:
+        expected_models = {
+            "gpt-4o",
+            "gpt-4o-mini",
+            "gpt-5.4",
+            "gpt-5.4-mini",
+            "gpt-5.4-nano",
+            "gpt-5.1",
+            "gpt-5-mini",
+            "gpt-5-nano",
+        }
+        actual_models = {
+            model
+            for provider, model in COST_TABLE
+            if provider == "openai"
+        }
+        assert expected_models.issubset(actual_models)

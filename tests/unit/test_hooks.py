@@ -90,9 +90,9 @@ class TestPathTraversalDetector:
         tc = _tool_call("read_file", path="../../etc/passwd")
         assert self._hooks().run_before_tool(tc) is None
 
-    def test_blocks_path_traversal_in_command(self) -> None:
+    def test_does_not_scan_free_form_command_text(self) -> None:
         tc = _tool_call("run_command", command="cat ../../etc/shadow")
-        assert self._hooks().run_before_tool(tc) is None
+        assert self._hooks().run_before_tool(tc) is tc
 
     def test_allows_normal_paths(self) -> None:
         tc = _tool_call("read_file", path="./data/file.txt")
@@ -100,6 +100,10 @@ class TestPathTraversalDetector:
 
     def test_allows_relative_within_dir(self) -> None:
         tc = _tool_call("read_file", path="src/main.py")
+        assert self._hooks().run_before_tool(tc) is tc
+
+    def test_allows_free_form_code_with_double_dot(self) -> None:
+        tc = _tool_call("execute_code", code="print('Birth..confirmation')")
         assert self._hooks().run_before_tool(tc) is tc
 
 

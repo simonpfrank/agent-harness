@@ -1,6 +1,9 @@
 # Streaming, Parallel Agents & API Layer — Roadmap
 
-**Status:** Brainstorm refined after discussion 2026-04-15. Purpose: map where parallelism lives, where streaming lives, where async genuinely pays off, and where a future API layer slots in — all while keeping the harness simple.
+**Status:** Active roadmap design
+**Parent roadmap item:** `Streaming / Parallel / Async epic` in `docs/roadmap.md`
+
+Purpose: map where parallelism lives, where streaming lives, where async genuinely pays off, and where a future API layer slots in — all while keeping the harness simple.
 
 ## Context
 

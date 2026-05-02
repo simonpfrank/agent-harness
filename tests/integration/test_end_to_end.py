@@ -91,6 +91,32 @@ class TestProviderKwargsPassthrough:
         )
         assert result.message.content is not None
 
+    @requires_openai_key
+    def test_openai_gpt_5_4_mini_accepts_max_tokens(self) -> None:
+        """GPT-5.4-mini runs through the provider without provider-shape errors."""
+        from agent_harness.providers.openai_provider import chat
+
+        result = chat(
+            [Message(role="user", content="Reply with just the word ok.")],
+            tools=[],
+            model="gpt-5.4-mini",
+            max_tokens=50,
+        )
+        assert result.message.content is not None
+
+    @requires_openai_key
+    def test_openai_gpt_5_nano_accepts_max_tokens(self) -> None:
+        """GPT-5-nano runs through the provider without provider-shape errors."""
+        from agent_harness.providers.openai_provider import chat
+
+        result = chat(
+            [Message(role="user", content="Reply with just the word ok.")],
+            tools=[],
+            model="gpt-5-nano",
+            max_tokens=50,
+        )
+        assert result.message.content is not None
+
 
 class TestInvalidConfig:
     def test_missing_instructions_raises(self) -> None:

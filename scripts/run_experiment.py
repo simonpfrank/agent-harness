@@ -22,6 +22,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import cast
 
 from scripts.score_run import score
 
@@ -87,7 +88,7 @@ def run_once(
     model: str,
     run_index: int,
     temperature: float | None,
-) -> dict:
+) -> dict[str, object]:
     """Run the agent once and return a result dict."""
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
     output_path = RUNS_DIR / f"{config_name}_{provider}_{model}_r{run_index}.json"
@@ -128,7 +129,7 @@ def run_once(
     }
 
 
-def _write_row(row: dict) -> None:
+def _write_row(row: dict[str, object]) -> None:
     """Append one row to the results CSV, writing header if new."""
     RESULTS_CSV.parent.mkdir(parents=True, exist_ok=True)
     is_new = not RESULTS_CSV.exists()
@@ -155,15 +156,20 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[{args.config} / {args.model}] run {i}/{args.runs}...", flush=True)
         row = run_once(args.config, args.provider, args.model, i, args.temperature)
         _write_row(row)
+        error = cast(str, row["error"])
+        correct = cast(int, row["correct"])
+        false_positives = cast(int, row["false_positives"])
+        cost = cast(float, row["cost"])
+        turns = cast(int, row["turns"])
         print(
-            f"  correct={row['correct']}/11 fp={row['false_positives']} "
-            f"cost=${row['cost']:.4f} turns={row['turns']} "
-            f"{('ERR: ' + row['error']) if row['error'] else ''}",
+            f"  correct={correct}/11 fp={false_positives} "
+            f"cost=${cost:.4f} turns={turns} "
+            f"{('ERR: ' + error) if error else ''}",
             flush=True,
         )
-        if not row["error"]:
-            corrects.append(row["correct"])
-            costs.append(row["cost"])
+        if not error:
+            corrects.append(correct)
+            costs.append(cost)
 
     if corrects:
         print(

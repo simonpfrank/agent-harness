@@ -9,14 +9,16 @@ import shlex
 import subprocess
 import sys
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, get_type_hints
 
-from agent_harness.memory import list_memories, recall_memory, save_memory
-from agent_harness.routing import run_agent
+from agent_harness.memory import list_memories as list_memories_for_dir
+from agent_harness.memory import recall_memory as recall_memory_for_dir
+from agent_harness.memory import save_memory as save_memory_for_dir
 from agent_harness.types import ToolCall, ToolResult
 
-tool_timeout: int = 30
+_logger = logging.getLogger(__name__)
 
 _TYPE_MAP: dict[type[Any], str] = {
     str: "string",
@@ -24,6 +26,19 @@ _TYPE_MAP: dict[type[Any], str] = {
     float: "number",
     bool: "boolean",
 }
+
+_DEFAULT_TIMEOUT = 30
+_DEFAULT_EXECUTOR = "subprocess"
+_DEFAULT_MAX_OUTPUT = 10_000
+
+
+@dataclass(frozen=True)
+class ToolRuntimeContext:
+    """Execution settings for a single run's tool registry."""
+
+    memory_dir: str = "memory"
+    tool_timeout: int = _DEFAULT_TIMEOUT
+    executor: str = _DEFAULT_EXECUTOR
 
 
 def _parse_arg_descriptions(docstring: str) -> dict[str, str]:
@@ -101,18 +116,7 @@ def run_command(command: str, working_dir: str = ".") -> str:
     Returns:
         Combined stdout and stderr output.
     """
-    args = shlex.split(command)
-    result = subprocess.run(
-        args,
-        capture_output=True,
-        text=True,
-        timeout=tool_timeout,
-        cwd=working_dir,
-    )
-    output = result.stdout
-    if result.stderr:
-        output += result.stderr
-    return output
+    return _run_command_impl(command, working_dir, _DEFAULT_TIMEOUT)
 
 
 def read_file(path: str) -> str:
@@ -168,17 +172,35 @@ def list_directory(path: str = ".") -> str:
     return "\n".join(lines)
 
 
-def _subprocess_executor(code: str, language: str, timeout: int) -> str:
-    """Execute code via subprocess.
+def execute_code(code: str, language: str = "python") -> str:
+    """Execute a code snippet and return stdout and stderr.
 
     Args:
-        code: The code to execute.
-        language: python or bash.
-        timeout: Execution timeout in seconds.
+        code: The code to execute
+        language: python or bash
 
     Returns:
         Combined stdout and stderr output.
     """
+    return _execute_code_impl(code, language, _DEFAULT_TIMEOUT, _DEFAULT_EXECUTOR)
+
+
+def _run_command_impl(command: str, working_dir: str, timeout: int) -> str:
+    args = shlex.split(command)
+    result = subprocess.run(
+        args,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        cwd=working_dir,
+    )
+    output = result.stdout
+    if result.stderr:
+        output += result.stderr
+    return output
+
+
+def _subprocess_executor(code: str, language: str, timeout: int) -> str:
     args = ["bash", "-c", code] if language == "bash" else [sys.executable, "-c", code]
     result = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
     output = result.stdout
@@ -193,47 +215,91 @@ executor_registry: dict[str, Executor] = {
     "subprocess": _subprocess_executor,
 }
 
-active_executor: str = "subprocess"
+
+def _execute_code_impl(code: str, language: str, timeout: int, executor_name: str) -> str:
+    executor = executor_registry[executor_name]
+    return executor(code, language, timeout)
 
 
-def execute_code(code: str, language: str = "python") -> str:
-    """Execute a code snippet and return stdout and stderr.
-
-    Delegates to the active executor (default: subprocess).
+def _run_agent_tool(agent_name: str, message: str) -> str:
+    """Run another agent and return its response.
 
     Args:
-        code: The code to execute
-        language: python or bash
+        agent_name: Name of the agent folder to run.
+        message: Message to send to the sub-agent.
+    """
+    from agent_harness.routing import run_agent
+
+    return run_agent(agent_name, message)
+
+
+def build_tool_registry(context: ToolRuntimeContext | None = None) -> dict[str, Callable[..., str]]:
+    """Build a tool registry for a specific runtime context.
+
+    Args:
+        context: Per-run execution settings. Defaults to static defaults.
 
     Returns:
-        Combined stdout and stderr output.
+        Mapping of tool name to callable.
     """
-    executor = executor_registry[active_executor]
-    return executor(code, language, tool_timeout)
+    ctx = context or ToolRuntimeContext()
+
+    def run_command_tool(command: str, working_dir: str = ".") -> str:
+        return _run_command_impl(command, working_dir, ctx.tool_timeout)
+
+    def execute_code_tool(code: str, language: str = "python") -> str:
+        return _execute_code_impl(code, language, ctx.tool_timeout, ctx.executor)
+
+    def save_memory_tool(key: str, content: str) -> str:
+        return save_memory_for_dir(key, content, ctx.memory_dir)
+
+    def recall_memory_tool(key: str) -> str:
+        return recall_memory_for_dir(key, ctx.memory_dir)
+
+    def list_memories_tool() -> str:
+        return list_memories_for_dir(ctx.memory_dir)
+
+    run_command_tool.__name__ = "run_command"
+    run_command_tool.__doc__ = run_command.__doc__
+    execute_code_tool.__name__ = "execute_code"
+    execute_code_tool.__doc__ = execute_code.__doc__
+    save_memory_tool.__name__ = "save_memory"
+    save_memory_tool.__doc__ = (
+        "Save information to long-term memory.\n\n"
+        "Args:\n"
+        "    key: Memory key (used as filename).\n"
+        "    content: Content to save.\n"
+    )
+    recall_memory_tool.__name__ = "recall_memory"
+    recall_memory_tool.__doc__ = (
+        "Recall information from long-term memory.\n\n"
+        "Args:\n"
+        "    key: Memory key to recall.\n"
+    )
+    list_memories_tool.__name__ = "list_memories"
+    list_memories_tool.__doc__ = "List all saved memory keys."
+
+    return {
+        "run_command": run_command_tool,
+        "read_file": read_file,
+        "write_file": write_file,
+        "list_directory": list_directory,
+        "execute_code": execute_code_tool,
+        "save_memory": save_memory_tool,
+        "recall_memory": recall_memory_tool,
+        "list_memories": list_memories_tool,
+        "run_agent": _run_agent_tool,
+    }
 
 
-registry: dict[str, Callable[..., str]] = {
-    "run_command": run_command,
-    "read_file": read_file,
-    "write_file": write_file,
-    "list_directory": list_directory,
-    "execute_code": execute_code,
-    "save_memory": save_memory,
-    "recall_memory": recall_memory,
-    "list_memories": list_memories,
-    "run_agent": run_agent,
-}
-# Note: handoff_agent is available via agent_harness.routing but NOT
-# registered as an LLM tool — its list[Message] parameter can't be
-# serialised to JSON schema. Use it programmatically in custom loops.
-
-
-_logger = logging.getLogger(__name__)
-
+registry: dict[str, Callable[..., str]] = build_tool_registry()
 _BUILTIN_NAMES = set(registry.keys())
 
 
-def discover_tools(tools_dir: str) -> None:
+def discover_tools(
+    tools_dir: str,
+    base_registry: dict[str, Callable[..., str]] | None = None,
+) -> dict[str, Callable[..., str]]:
     """Discover and register custom tools from a directory.
 
     Each .py file should contain one public function with type annotations.
@@ -241,10 +307,15 @@ def discover_tools(tools_dir: str) -> None:
 
     Args:
         tools_dir: Path to directory containing tool .py files.
+        base_registry: Registry to extend. Defaults to the module-level registry.
+
+    Returns:
+        The registry that received discovered tools.
     """
+    target_registry = base_registry if base_registry is not None else registry
     path = Path(tools_dir)
     if not path.is_dir():
-        return
+        return target_registry
     for py_file in sorted(path.glob("*.py")):
         if py_file.name.startswith("_"):
             continue
@@ -263,42 +334,38 @@ def discover_tools(tools_dir: str) -> None:
                 if name in _BUILTIN_NAMES:
                     _logger.warning("Custom tool '%s' skipped — would overwrite built-in", name)
                     continue
-                registry[name] = obj
+                target_registry[name] = obj
                 _logger.info("Registered custom tool: %s from %s", name, py_file.name)
-                break  # one function per file
+                break
         except Exception as exc:
             _logger.warning("Failed to load tool from %s: %s", py_file.name, exc)
-
-
-_DEFAULT_MAX_OUTPUT = 10_000
+    return target_registry
 
 
 def _truncate(output: str, max_chars: int) -> str:
-    """Truncate output if it exceeds max_chars.
-
-    Args:
-        output: Raw output string.
-        max_chars: Maximum allowed characters.
-
-    Returns:
-        Original or truncated output with message.
-    """
+    """Truncate output if it exceeds max_chars."""
     if len(output) <= max_chars:
         return output
     return output[:max_chars] + f"\n[truncated — {len(output)} chars total]"
 
 
-def execute_tool(tool_call: ToolCall, max_output_chars: int = _DEFAULT_MAX_OUTPUT) -> ToolResult:
+def execute_tool(
+    tool_call: ToolCall,
+    max_output_chars: int = _DEFAULT_MAX_OUTPUT,
+    tool_registry: dict[str, Callable[..., str]] | None = None,
+) -> ToolResult:
     """Execute a tool call and return the result.
 
     Args:
         tool_call: The tool invocation to execute.
         max_output_chars: Max output characters before truncation.
+        tool_registry: Registry to use. Defaults to the module-level registry.
 
     Returns:
         ToolResult with output or error.
     """
-    fn = registry.get(tool_call.name)
+    active_registry = tool_registry or registry
+    fn = active_registry.get(tool_call.name)
     if fn is None:
         return ToolResult(tool_call_id=tool_call.id, error=f"Unknown tool: {tool_call.name}")
     try:

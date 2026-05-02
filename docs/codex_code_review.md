@@ -1,5 +1,7 @@
 # Codex Code Review
 
+> Status note (2026-04-16): this document is the review that drove the current runtime refactor. Several findings here have now been implemented; treat it as review history plus design rationale, not as the current state snapshot.
+
 ## Summary
 
 The repo has a good core idea and several files are still pleasantly small, but the current implementation has drifted away from its own main promise: a minimal, flat harness where an agent folder behaves consistently everywhere. The biggest problems are not style issues; they are behavior mismatches and global-state shortcuts that will make the harness harder to trust as experimentation grows.

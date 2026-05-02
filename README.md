@@ -15,6 +15,7 @@ As a summary, be able to run an agent in a cli, and if it needs more inputs just
 - **Sessions** — save/resume conversations across restarts
 - **Memory** — agents decide what to remember via `save_memory`/`recall_memory` tools
 - **Agent routing** — agents delegate to other agents via `run_agent` tool with independent budgets
+- **Shared runtime path** — CLI runs and `run_agent` sub-agents use the same prompt assembly, hooks, permissions, tracing, and tool wiring
 - **CLI config overrides** — `--provider`, `--model`, `--loop`, `--max-turns` etc. without editing files
 - **Structured traces** — JSONL files with full conversation replay (prompts, responses, tool I/O)
 - **Budget enforcement** — turn limits and cost ceilings, deterministic (never exceeded)
@@ -68,7 +69,7 @@ An agent is a folder containing:
 - `instructions.md` — system prompt (what the agent does)
 - `tools.md` (optional) — guidance on tool usage
 
-The runtime loads the config, builds tool schemas from the registry, applies safety hooks, and runs an agent loop. Seven loop patterns are available:
+The runtime loads the config, builds a per-run tool registry, assembles the full system prompt, applies safety hooks and permissions, and runs an agent loop. CLI execution and `run_agent` delegation go through the same runtime path, so sub-agents see the same `instructions.md`, `tools.md`, and skills as standalone runs. Seven loop patterns are available:
 
 | Loop | Config value | Pattern |
 |------|-------------|---------|
@@ -85,11 +86,11 @@ See `docs/agentic-design-patterns.md` for full descriptions and flow diagrams.
 ```
 types.py (root — dataclasses only)
   ↓
-tools.py, budget.py, display.py, hooks.py, permissions.py, providers/*, config.py
+tools.py, budget.py, hooks.py, permissions.py, providers/*, config.py
   ↓
-loops/react.py
+runtime.py (shared execution setup)
   ↓
-cli.py (composition root)
+cli.py / routing.py
 ```
 
 ## Safety and Security
@@ -103,7 +104,7 @@ Agent Harness includes five built-in safety hooks that filter tool calls and sca
 | Hook | Type | What it does | What it does NOT do |
 |------|------|-------------|-------------------|
 | `dangerous_command_blocker` | before tool | Blocks `rm -rf`, `sudo`, `mkfs`, `dd if=`, writes to `/dev/` | Does not catch every destructive command. A determined or creative LLM can find other ways to cause damage (e.g. `find / -delete`, overwriting files with `>`, Python `os.remove`). |
-| `path_traversal_detector` | before tool | Blocks `..` in any tool argument | Only checks for literal `..`. Does not resolve symlinks or normalise paths. A symlink pointing outside the working directory will bypass this. |
+| `path_traversal_detector` | before tool | Checks path-like args such as `path`, `working_dir`, and `directory`, and blocks relative paths that escape the workspace | It does not inspect arbitrary command/code text, and it is not a full filesystem sandbox. Absolute paths and symlink tricks are still outside its protection scope. |
 | `network_exfiltration_blocker` | before tool | Blocks `curl`, `wget`, `nc`, `ncat` in commands and `requests`/`urllib`/`http.client` in code | Only matches known command names and Python modules. Does not block network access via `socket`, compiled binaries, or less common tools. Does not inspect actual network traffic. |
 
 ### Default-on hooks (output scanning)
@@ -170,8 +171,16 @@ Tool permissions are **off by default** (all tools allowed). To enable, add a pe
 permissions:
   always_allow: [read_file]           # never prompted
   always_ask: [run_command]           # prompted every time
-  # tools not in either list: prompted once per session
+  # tools not in either list: prompt decides once/session/persistent
 ```
+
+Prompt choices now map directly to behavior:
+- `once` — allow this call only
+- `session` — remember until the current process exits
+- `persistent` — save approval to `{agent_dir}/.permissions.yaml`
+- `deny` — reject the call
+
+Sub-agent runs are non-interactive. If a delegated agent reaches a tool call that needs prompting and has no saved approval, the call is denied instead of hanging for terminal input.
 
 ## Creating an Agent
 

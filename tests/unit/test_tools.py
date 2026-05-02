@@ -4,6 +4,8 @@ import os
 import tempfile
 
 from agent_harness.tools import (
+    ToolRuntimeContext,
+    build_tool_registry,
     execute_code,
     execute_tool,
     generate_schema,
@@ -133,13 +135,12 @@ class TestExecutorRegistry:
 
         executor_registry["fake"] = fake_executor
         try:
-            from agent_harness import tools
-            old = tools.active_executor
-            tools.active_executor = "fake"
-            output = execute_code("print('hi')")
+            tool_registry = build_tool_registry(ToolRuntimeContext(executor="fake"))
+            tc = ToolCall(id="tc_1", name="execute_code", arguments={"code": "print('hi')"})
+            result = execute_tool(tc, tool_registry=tool_registry)
+            output = result.output or ""
             assert output == "fake: print('hi')"
         finally:
-            tools.active_executor = old
             del executor_registry["fake"]
 
 
@@ -148,21 +149,24 @@ class TestWriteFile:
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "out.txt")
             result = write_file(path, "hello world")
-            assert "hello world" == open(path).read()
+            with open(path) as handle:
+                assert handle.read() == "hello world"
             assert "11" in result  # char count
 
     def test_creates_parent_dirs(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "sub", "deep", "file.txt")
             write_file(path, "nested")
-            assert open(path).read() == "nested"
+            with open(path) as handle:
+                assert handle.read() == "nested"
 
     def test_overwrites_existing(self) -> None:
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
             f.write("old")
             f.flush()
             write_file(f.name, "new")
-            assert open(f.name).read() == "new"
+            with open(f.name) as handle:
+                assert handle.read() == "new"
         os.unlink(f.name)
 
     def test_registered(self) -> None:

@@ -3,7 +3,7 @@
 from scripts.score_run import score
 
 
-def _expected() -> dict:
+def _expected() -> dict[str, object]:
     return {
         "matches": [
             {"input": "Sex", "reference": "Primary Gender"},

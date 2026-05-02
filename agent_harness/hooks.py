@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from agent_harness.network import (
@@ -41,15 +42,17 @@ _SECRETS_PATTERNS = [
     (r"-----BEGIN (?:RSA |EC |DSA )?PRIVATE KEY-----", "private key"),
 ]
 
+_PATH_ARGUMENT_NAMES = {"path", "file_path", "working_dir", "directory"}
+
 
 def dangerous_command_blocker(tool_call: ToolCall) -> ToolCall | None:
     """Block dangerous shell commands.
 
     Args:
-        tool_call: The tool call to check.
+        tool_call: Tool call to inspect.
 
     Returns:
-        The tool call if safe, None if blocked.
+        The original tool call if it is safe, otherwise `None`.
     """
     if tool_call.name != "run_command":
         return tool_call
@@ -61,19 +64,35 @@ def dangerous_command_blocker(tool_call: ToolCall) -> ToolCall | None:
     return tool_call
 
 
-def path_traversal_detector(tool_call: ToolCall) -> ToolCall | None:
-    """Block file operations with path traversal.
+def _escapes_workspace(raw_path: str, workspace_root: Path) -> bool:
+    candidate = Path(raw_path)
+    if candidate.is_absolute():
+        return False
+    resolved = (workspace_root / candidate).resolve(strict=False)
+    return not resolved.is_relative_to(workspace_root)
+
+
+def path_traversal_detector(
+    tool_call: ToolCall,
+    workspace_root: Path | None = None,
+) -> ToolCall | None:
+    """Block relative path arguments that escape the workspace.
 
     Args:
-        tool_call: The tool call to check.
+        tool_call: Tool call to inspect.
+        workspace_root: Base directory used to resolve relative paths. Defaults to cwd.
 
     Returns:
-        The tool call if safe, None if blocked.
+        The original tool call if path-like arguments stay within the workspace,
+        otherwise `None`.
     """
-    values = " ".join(str(v) for v in tool_call.arguments.values())
-    if ".." in values:
-        logger.warning("Blocked path traversal: %s", values)
-        return None
+    root = (workspace_root or Path.cwd()).resolve()
+    for name, value in tool_call.arguments.items():
+        if name not in _PATH_ARGUMENT_NAMES:
+            continue
+        if isinstance(value, str) and _escapes_workspace(value, root):
+            logger.warning("Blocked path traversal in %s=%s", name, value)
+            return None
     return tool_call
 
 
@@ -81,11 +100,12 @@ def injection_scanner(tool_call: ToolCall, result: ToolResult) -> ToolResult:
     """Scan tool output for prompt injection patterns.
 
     Args:
-        tool_call: The tool call that produced the result.
-        result: The tool result to scan.
+        tool_call: Tool call that produced the output.
+        result: Raw tool result.
 
     Returns:
-        Original result if clean, wrapped result if suspicious.
+        Original result if clean, or a wrapped warning result if suspicious patterns
+        were found.
     """
     if result.error or not result.output:
         return result
@@ -101,11 +121,11 @@ def secrets_leakage_scanner(tool_call: ToolCall, result: ToolResult) -> ToolResu
     """Redact secrets from tool output before they reach the LLM.
 
     Args:
-        tool_call: The tool call that produced the result.
-        result: The tool result to scan.
+        tool_call: Tool call that produced the output.
+        result: Raw tool result.
 
     Returns:
-        Result with secrets redacted, or original if clean.
+        Original result if no secret-like values are found, otherwise a redacted copy.
     """
     if result.error or not result.output:
         return result
@@ -123,7 +143,6 @@ def secrets_leakage_scanner(tool_call: ToolCall, result: ToolResult) -> ToolResu
 
 _BEFORE_REGISTRY: dict[str, BeforeHook] = {
     "dangerous_command_blocker": dangerous_command_blocker,
-    "path_traversal_detector": path_traversal_detector,
 }
 
 _DEFAULT_BEFORE: list[str] = [
@@ -140,13 +159,19 @@ _AFTER_REGISTRY: dict[str, AfterHook] = {
 _DEFAULT_AFTER: list[str] = ["injection_scanner", "secrets_leakage_scanner"]
 
 
+def _path_hook(tool_call: ToolCall, root_path: Path) -> ToolCall | None:
+    """Run the path traversal detector with a bound root path."""
+    return path_traversal_detector(tool_call, root_path)
+
+
 class Hooks:
     """Chainable safety hooks for tool calls and results.
 
     Args:
-        hook_config: Dict with optional 'before_tool', 'after_tool', 'allowed_domains'.
-        domain_prompt_fn: Callback to ask user about new domains.
-        agent_dir: Agent directory for persisting domain whitelist.
+        hook_config: Hook configuration from agent config.
+        domain_prompt_fn: Optional callback used by the network blocker.
+        agent_dir: Agent directory for persisted allowlists such as domains.
+        workspace_root: Base directory used by path validation.
     """
 
     def __init__(
@@ -154,14 +179,18 @@ class Hooks:
         hook_config: dict[str, Any],
         domain_prompt_fn: DomainPromptFn | None = None,
         agent_dir: str | None = None,
+        workspace_root: str | None = None,
     ) -> None:
         before_names: list[str] = hook_config.get("before_tool", _DEFAULT_BEFORE)
+        root_path = Path(workspace_root or ".").resolve()
         self._before: list[BeforeHook] = []
         for name in before_names:
             if name == "network_exfiltration_blocker":
                 allowed = load_allowed_domains(hook_config, agent_dir)
                 p_path = persist_path_for(agent_dir)
                 self._before.append(make_network_blocker(allowed, domain_prompt_fn, p_path))
+            elif name == "path_traversal_detector":
+                self._before.append(lambda tc: _path_hook(tc, root_path))
             else:
                 self._before.append(_BEFORE_REGISTRY[name])
         self._after: list[AfterHook] = [
@@ -169,13 +198,13 @@ class Hooks:
         ]
 
     def run_before_tool(self, tool_call: ToolCall) -> ToolCall | None:
-        """Run before-tool hooks in order. None from any hook blocks the call.
+        """Run before-tool hooks in order.
 
         Args:
-            tool_call: The tool call to check.
+            tool_call: Tool call to inspect.
 
         Returns:
-            The (possibly modified) tool call, or None if blocked.
+            Possibly modified tool call, or `None` if any hook blocks the call.
         """
         current = tool_call
         for hook in self._before:
@@ -189,11 +218,11 @@ class Hooks:
         """Run after-tool hooks in order.
 
         Args:
-            tool_call: The tool call that produced the result.
-            result: The tool result to process.
+            tool_call: Tool call that produced the result.
+            result: Tool result to scan or modify.
 
         Returns:
-            The (possibly modified) tool result.
+            Possibly modified tool result after all after-tool hooks run.
         """
         current = result
         for hook in self._after:

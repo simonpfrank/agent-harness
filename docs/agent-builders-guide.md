@@ -8,7 +8,7 @@ Practical reference for building agents, tools, and skills. Read `architecture.m
 
 | Thing to build | Where it lives | What changes |
 |---|---|---|
-| Built-in tool | `agent_harness/tools.py` | Add function + registry entry |
+| Built-in tool | `agent_harness/tools.py` | Add helper + include it in the per-run built-in registry |
 | Custom tool | `tools/<name>.py` | New file only (auto-discovered) |
 | Shared skill | `skills/<name>/SKILL.md` | New directory + file only |
 | Agent | `agents/<name>/` | New directory (config.yaml + instructions.md) |
@@ -18,7 +18,7 @@ Practical reference for building agents, tools, and skills. Read `architecture.m
 
 ## Built-in Tools
 
-Defined in `agent_harness/tools.py`. Each is a typed function registered in the `registry` dict.
+Defined in `agent_harness/tools.py`. Built-ins are exposed through a per-run registry built from runtime context, so memory paths, timeouts, and executors are agent-specific without relying on module globals.
 
 ### Pattern
 
@@ -37,13 +37,14 @@ def my_tool(arg1: str, arg2: int = 10) -> str:
     return "result string"
 ```
 
-Then add to the registry:
+Then add it to the built-in registry factory:
 
 ```python
-registry: dict[str, Callable[..., str]] = {
-    # ... existing tools ...
-    "my_tool": my_tool,
-}
+def build_tool_registry(context: ToolRuntimeContext) -> dict[str, Callable[..., str]]:
+    return {
+        # ... existing tools ...
+        "my_tool": my_tool,
+    }
 ```
 
 ### Schema auto-generation
@@ -70,12 +71,12 @@ registry: dict[str, Callable[..., str]] = {
 ### Safety
 
 All tool calls pass through hooks before execution:
-1. `path_traversal_detector` — blocks any tool arg containing `..`
+1. `path_traversal_detector` — checks path-like args (`path`, `working_dir`, `directory`) and blocks relative paths that escape the workspace
 2. `dangerous_command_blocker` — blocks `rm -rf`, `sudo`, etc. in `run_command`
 3. `injection_scanner` — flags suspicious patterns in tool output
 4. `secrets_leakage_scanner` — redacts API keys/tokens from output
 
-New built-in tools get path traversal protection for free (checks all arg values).
+New built-in tools get path traversal protection for free if they use conventional path argument names.
 
 ---
 
@@ -115,7 +116,7 @@ def file_search(pattern: str, directory: str = ".") -> str:
 
 ### Discovery mechanism
 
-`cli.py` calls `discover_tools("tools")` during setup. This:
+The shared runtime calls `discover_tools("tools")` during setup. This:
 1. Scans `tools/*.py` (skips `_`-prefixed files)
 2. Imports each module
 3. Finds the first public function with a return type hint
@@ -162,7 +163,7 @@ CLI tools available on this machine via `run_command`. Use these instead of gues
 
 ### System prompt assembly order
 
-Built in `cli.py:_build_system_prompt()`:
+Built in `runtime.py:build_system_prompt()`:
 
 ```
 1. instructions.md          (required)
@@ -209,6 +210,16 @@ provider_kwargs: {}                   # extra kwargs passed to provider chat()
 permissions: {}                       # tool permission config
 hooks: {}                             # safety hook config
 ```
+
+### Permission prompt semantics
+
+For tools not covered by `always_allow` or `always_ask`, the runtime prompt can choose:
+- `once` — allow this call only
+- `session` — remember until process exit
+- `persistent` — save to `{agent_dir}/.permissions.yaml`
+- `deny` — reject the call
+
+Delegated sub-agent runs are non-interactive. If a sub-agent hits a tool call that would need prompting and has no saved approval, that call is denied rather than waiting on terminal input.
 
 All fields except `name` have sensible defaults. A minimal config:
 
@@ -326,23 +337,23 @@ python -m agent_harness init my-new-agent
 
 ## Wiring: How It All Connects
 
-The composition root is `cli.py`. On `run`:
+`runtime.py` is the shared execution setup layer. `cli.py` is the terminal entry point that uses it. On `run`:
 
 ```
 1. Load config.yaml + instructions.md -> AgentConfig
 2. Apply CLI overrides
-3. Validate against registries (provider, tools, loop exist)
-4. Set tool module globals (timeout, executor, memory dir)
-5. Discover custom tools from tools/
+3. Build a per-run tool registry from runtime context
+4. Discover custom tools from tools/
+5. Validate against registries (provider, tools, loop exist)
 6. Build system prompt (instructions + tools.md + skills)
-7. Create tool schemas from registered functions
+7. Create tool schemas from enabled functions
 8. Create Budget, Hooks, Permissions, Tracer
 9. Compose callbacks (on_response, on_tool_call, on_budget)
 10. Get loop function from registry
 11. Run: loop_fn(chat_fn, messages, tool_schemas, config, callbacks)
 ```
 
-The loop calls `chat_fn` (provider), gets tool calls, calls `on_tool_call` (which runs hooks -> permissions -> execute -> post-hooks), and repeats.
+The loop calls `chat_fn` (provider), gets tool calls, calls `on_tool_call` (which runs hooks -> permissions -> execute -> post-hooks), and repeats. Delegated `run_agent` calls use the same runtime path with prompting disabled.
 
 ---
 

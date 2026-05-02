@@ -14,6 +14,12 @@ _CONTEXT_LIMITS: dict[tuple[str, str], int] = {
     ("anthropic", "claude-opus-4-6"): 200_000,
     ("openai", "gpt-4o-mini"): 128_000,
     ("openai", "gpt-4o"): 128_000,
+    ("openai", "gpt-5.4"): 1_000_000,
+    ("openai", "gpt-5.4-mini"): 400_000,
+    ("openai", "gpt-5.4-nano"): 400_000,
+    ("openai", "gpt-5.1"): 400_000,
+    ("openai", "gpt-5-mini"): 400_000,
+    ("openai", "gpt-5-nano"): 400_000,
 }
 
 _DEFAULT_LIMIT = 128_000

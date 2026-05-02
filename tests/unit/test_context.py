@@ -23,6 +23,9 @@ class TestGetContextLimit:
         limit = get_context_limit("anthropic", "claude-haiku-4-5-20251001")
         assert limit > 0
 
+    def test_supported_openai_model_has_explicit_limit(self) -> None:
+        assert get_context_limit("openai", "gpt-5.4-mini") == 400_000
+
     def test_unknown_model_returns_default(self) -> None:
         limit = get_context_limit("unknown", "unknown-model")
         assert limit > 0

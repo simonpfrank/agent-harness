@@ -1,4 +1,4 @@
-"""Long-term memory tools — save, recall, and list agent memories."""
+"""Long-term memory helpers and tools."""
 
 from __future__ import annotations
 
@@ -7,10 +7,10 @@ from pathlib import Path
 
 from agent_harness.hooks import INJECTION_PATTERNS
 
-memory_dir: str = ""
+DEFAULT_MEMORY_DIR = "memory"
 
 
-def save_memory(key: str, content: str) -> str:
+def save_memory(key: str, content: str, memory_dir: str = DEFAULT_MEMORY_DIR) -> str:
     """Save information to long-term memory.
 
     Scans content for injection patterns before saving.
@@ -18,6 +18,7 @@ def save_memory(key: str, content: str) -> str:
     Args:
         key: Memory key (used as filename).
         content: Content to save.
+        memory_dir: Directory where memory files are stored.
 
     Returns:
         Confirmation message.
@@ -32,11 +33,12 @@ def save_memory(key: str, content: str) -> str:
     return f"Saved memory: {key}"
 
 
-def recall_memory(key: str) -> str:
+def recall_memory(key: str, memory_dir: str = DEFAULT_MEMORY_DIR) -> str:
     """Recall information from long-term memory.
 
     Args:
         key: Memory key to recall.
+        memory_dir: Directory where memory files are stored.
 
     Returns:
         Stored content.
@@ -47,8 +49,11 @@ def recall_memory(key: str) -> str:
     return (Path(memory_dir) / f"{key}.md").read_text()
 
 
-def list_memories() -> str:
+def list_memories(memory_dir: str = DEFAULT_MEMORY_DIR) -> str:
     """List all saved memory keys.
+
+    Args:
+        memory_dir: Directory where memory files are stored.
 
     Returns:
         Newline-separated list of keys, or a message if empty.

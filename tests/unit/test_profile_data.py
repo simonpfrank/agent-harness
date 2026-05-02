@@ -35,7 +35,8 @@ class TestProfileDataCSV:
         col = result["columns"][0]
         expected_keys = {
             "name", "data_type", "population_rate",
-            "unique_percent", "pattern", "sample_values", "characteristics",
+            "unique_count", "unique_percent", "pattern",
+            "sample_values", "characteristics", "stats",
         }
         assert expected_keys == set(col.keys())
 
@@ -52,7 +53,6 @@ class TestProfileDataCSV:
         col = result["columns"][0]
         assert col["data_type"] == "numeric"
 
-    @pytest.mark.skip(reason="stats field commented out for lean profile testing")
     def test_numeric_stats(self) -> None:
         from tools.profile_data import profile_data
 
@@ -68,7 +68,6 @@ class TestProfileDataCSV:
         assert col["stats"]["max"] == 300.0
         assert col["stats"]["mean"] == 200.42
 
-    @pytest.mark.skip(reason="stats field commented out for lean profile testing")
     def test_numeric_stats_not_on_text(self) -> None:
         from tools.profile_data import profile_data
 
@@ -82,7 +81,6 @@ class TestProfileDataCSV:
         col = result["columns"][0]
         assert col["stats"] is None
 
-    @pytest.mark.skip(reason="unique_count field commented out for lean profile testing")
     def test_unique_count(self) -> None:
         from tools.profile_data import profile_data
 
@@ -263,8 +261,8 @@ class TestProfileDataExcel:
     def test_xlsx_file(self) -> None:
         from tools.profile_data import profile_data
 
-        pandas = pytest.importorskip("pandas")
-        openpyxl = pytest.importorskip("openpyxl")
+        pytest.importorskip("pandas")
+        pytest.importorskip("openpyxl")
         import pandas as pd
 
         with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:

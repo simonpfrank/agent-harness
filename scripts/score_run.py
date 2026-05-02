@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 
 @dataclass(frozen=True)
@@ -25,7 +27,7 @@ class ScoreResult:
     incorrect_claims: list[tuple[str, str]]
 
 
-def score(output: dict, expected: dict) -> ScoreResult:
+def score(output: Mapping[str, object], expected: Mapping[str, object]) -> ScoreResult:
     """Compare agent output matches against ground-truth pairs.
 
     Args:
@@ -37,10 +39,13 @@ def score(output: dict, expected: dict) -> ScoreResult:
     Returns:
         ScoreResult with correct count, false positives, and miss details.
     """
-    expected_pairs = {(m["input"], m["reference"]) for m in expected["matches"]}
+    expected_matches = cast(list[dict[str, str]], expected["matches"])
+    output_matches = cast(list[dict[str, str]], output.get("matches", []))
+
+    expected_pairs = {(m["input"], m["reference"]) for m in expected_matches}
     claimed_pairs = {
         (m["input_column"], m["reference_column"])
-        for m in output.get("matches", [])
+        for m in output_matches
     }
 
     correct_pairs = expected_pairs & claimed_pairs
