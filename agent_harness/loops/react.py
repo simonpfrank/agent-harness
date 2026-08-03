@@ -41,7 +41,11 @@ def run(
             messages.clear()
             messages.extend(trimmed)
         logger.debug("Turn %d: calling %s/%s", turn + 1, config.provider, config.model)
-        response = chat_fn(messages, tool_schemas, model=config.model, **config.provider_kwargs)
+        response = chat_fn(
+            messages, tool_schemas, model=config.model,
+            stream=config.stream, on_delta=cb.on_delta, on_thinking_delta=cb.on_thinking_delta,
+            **config.provider_kwargs,
+        )
         messages.append(response.message)
         logger.info(
             "Turn %d: %d in / %d out tokens",

@@ -318,6 +318,35 @@ provider_kwargs:
 
 Both providers retry transient errors (rate limits, server errors) with exponential backoff (1s, 2s, 4s). Auth errors fail immediately with a clear message.
 
+## Streaming and Extended Thinking
+
+Enable streaming per agent in `config.yaml` — text prints token-by-token instead of waiting for the full response:
+
+```yaml
+provider: anthropic  # or openai
+stream: true
+```
+
+Or per-run: `--stream` / `--no-stream`.
+
+Supported for both `anthropic` and `openai` (Responses API models only — `gpt-4o`, `gpt-4o-mini`, the `gpt-5.x` family). Streaming is rejected at config-validation time for OpenAI-compatible backends reached via `provider_kwargs.base_url` (e.g. LM Studio) — that path uses Chat Completions, which isn't wired for streaming here.
+
+Extended thinking is Anthropic-only, independent of streaming — add a `thinking` block under `provider_kwargs`:
+
+```yaml
+provider_kwargs:
+  thinking:
+    budget_tokens: 2000  # must be >= 1024 and < max_tokens; incompatible with temperature/top_p
+```
+
+Thinking is captured either way but hidden from the CLI by default. Show it with:
+
+```yaml
+show_thinking: true
+```
+
+or `--show-thinking` / `--no-show-thinking` per run.
+
 ## Built-in Tools
 
 - `run_command` — run a shell command (uses `shlex.split`, no `shell=True`)

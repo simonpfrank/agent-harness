@@ -137,6 +137,16 @@ Deferred but on the roadmap so we don't design it into a corner.
 **Not prerequisite, safely deferred:**
 - Auth, persistence upgrade, rate limiting, multi-tenancy.
 
+**Another concrete motivation, added 2026-08-03 (from RAG design discussion):** a
+browser-based chat client is the natural home for rendering retrieved images
+properly — no terminal-capability guessing, no block-art fidelity ceiling like
+the CLI's `rich-pixels` fallback has. Fits the existing event-seam design
+without change: "here's a retrieved image" is just another event type a
+future SSE layer forwards, same as `TextDelta`/`ThinkingDelta` — CLI keeps
+`rich-pixels` as its cheap fallback, both consumers sit behind the same
+callback/event seam rather than needing separate plumbing. Not a reason to
+build the API layer now — just another data point for when it does get built.
+
 ---
 
 ## Part 5 — Crazy end (explicitly parked)
@@ -187,6 +197,56 @@ Revisit if and when something concrete demands them.
 ## Outstanding decisions
 
 1. **Phase 1 scope:** do you want stdout streaming and `run_agents_parallel` bundled, or land them separately?
+   **Resolved (2026-08-03):** landed separately. Streaming (option A, callback-based) plus extended thinking shipped for the Anthropic provider; `run_agents_parallel`/`contextvars` work not started.
 2. **Local adjudicator experiments:** which existing agent is the best testbed for the hybrid pattern? (Column-matcher is the obvious candidate but you flagged that's handled in the other session.)
 3. **Thinking events in Phase 1:** include in the callback now (even if CLI hides them), or wait for Phase 2's event stream?
+   **Resolved (2026-08-03):** included now, not deferred. `on_thinking_delta(agent_id, chunk)` exists on `LoopCallbacks` and is wired for the Anthropic provider; CLI still hides thinking by default (`show_thinking: false`), matching the "off by default, noise" stance above, but it's now a persisted per-agent config field rather than unavailable.
 4. **Async migration stance:** confirm "async at boundary, sync core" is acceptable — we won't pre-emptively async the loops/providers.
+
+## Phase 1 implementation notes (2026-08-03)
+
+Delivered for the Anthropic provider only (OpenAI untouched; `validate_config`
+rejects `stream`/`thinking` on any other provider):
+- `Message` gained `thinking`/`thinking_blocks`; `LoopCallbacks` gained
+  `on_delta`/`on_thinking_delta` with signature `(agent_id, chunk)` per this
+  doc's L3 sink design (`agent_id` unused until parallel agents exist).
+- `AgentConfig.stream` and `AgentConfig.show_thinking` are persisted
+  `config.yaml` fields, with `--stream`/`--show-thinking` CLI overrides.
+- `provider_kwargs.thinking: {budget_tokens: N}` enables extended thinking,
+  independent of `stream` — validated (budget ≥1024, < max_tokens,
+  incompatible with `temperature`/`top_p`) before the request goes out.
+- `chat_fn` still returns a complete `Response` at the end — loops don't
+  change shape, matching option A exactly. `on_response` skips the CLI's
+  final markdown re-print when `stream` is true, since deltas already
+  printed it live.
+- Known gap, accepted deliberately: `with_retry` still wraps the whole
+  streaming call, so a transient error after some deltas have printed can
+  duplicate output on retry. Not fixed — revisit only if it proves painful.
+- Full plan: `/Users/simonfrank/.claude/plans/abstract-doodling-wren.md`.
+
+## Phase 1 follow-up: OpenAI-modern streaming (2026-08-03)
+
+Extended option A to OpenAI's Responses API (the only endpoint hosted
+"modern" models — `gpt-4o`, `gpt-4o-mini`, `gpt-5.x` — use; confirmed via SDK
+introspection that `client.responses.stream()` has its own accumulator,
+`get_final_response()`, same shape as Anthropic's). No reasoning/thinking
+content extraction added — OpenAI reasoning models still only expose the
+existing `reasoning_effort` input knob, no readable output content.
+
+- `openai_provider.chat()` gained the same `stream`/`on_delta` kwargs as
+  Anthropic, dispatching `response.output_text.delta` events.
+- Chat Completions (the `base_url`/local-backend fallback) explicitly
+  rejects `stream=True` with a clear `ValueError` — both at the provider
+  boundary and in `runtime.validate_config` — rather than silently ignoring
+  it or guessing at chunk reassembly for that endpoint.
+- `validate_config`'s stream guard now allows `provider in ("anthropic",
+  "openai")`, with an extra rejection when `openai` + `provider_kwargs.base_url`
+  are combined.
+- Unit-verified (28 provider tests + validate_config tests, all green;
+  ruff/mypy/radon clean, no new D-or-worse complexity).
+- **Not fully integration-verified**: the real-API OpenAI streaming test was
+  written and run, but failed with `insufficient_quota` (OpenAI account has
+  no credits) — a billing issue, not a code defect. The error was a
+  retryable `api_error` (429), not `BadRequestError`, meaning the request
+  reached OpenAI and was shaped correctly; it just couldn't complete. Revisit
+  once the account has credits.

@@ -396,6 +396,22 @@ def _build_create_kwargs(
     return create_kwargs
 
 
+def _stream_responses_deltas(stream: Any, on_delta: Any) -> Response:
+    """Consume a ResponseStream, dispatching text deltas, and return the final Response.
+
+    Args:
+        stream: Open `ResponseStream` context manager value.
+        on_delta: Optional callback for text deltas, `(agent_id, chunk)`.
+
+    Returns:
+        Parsed Response built from the stream's final accumulated response.
+    """
+    for event in stream:
+        if event.type == "response.output_text.delta" and on_delta is not None:
+            on_delta("default", event.delta)
+    return _to_response(stream.get_final_response())
+
+
 def chat(messages: list[Message], tools: list[dict[str, Any]], model: str = "gpt-4o-mini", **kwargs: Any) -> Response:
     """Send messages to OpenAI and return a harness response.
 
@@ -404,13 +420,16 @@ def chat(messages: list[Message], tools: list[dict[str, Any]], model: str = "gpt
         tools: Tool schemas for function calling.
         model: Model identifier.
         **kwargs: Provider overrides such as `temperature`, `top_p`,
-            `max_tokens`, `base_url`, or `api_key`.
+            `max_tokens`, `base_url`, `api_key`, `stream` (bool, Responses
+            API models only), or `on_delta` (`(agent_id, chunk) -> None`,
+            only used when `stream=True`).
 
     Returns:
         Parsed Response with message, usage, and stop reason.
 
     Raises:
-        ValueError: If the hosted OpenAI model is intentionally unsupported.
+        ValueError: If the hosted OpenAI model is intentionally unsupported,
+            or `stream=True` is requested for a Chat Completions backend.
     """
     base_url = kwargs.get("base_url")
     instructions, input_items = _to_openai_input(messages)
@@ -429,9 +448,17 @@ def chat(messages: list[Message], tools: list[dict[str, Any]], model: str = "gpt
     endpoint = _response_endpoint_for_model(model, base_url=base_url)
     client = _get_client(base_url=base_url, api_key=kwargs.get("api_key"))
 
+    stream = kwargs.get("stream", False)
+    if stream and endpoint == "chat_completions":
+        raise ValueError("stream is not supported for Chat Completions (custom base_url) backends")
+    on_delta = kwargs.get("on_delta")
+
     def _call() -> Response:
         if endpoint == "chat_completions":
             return _to_response(client.chat.completions.create(**create_kwargs))
+        if stream:
+            with client.responses.stream(**create_kwargs) as response_stream:
+                return _stream_responses_deltas(response_stream, on_delta)
         return _to_response(client.responses.create(**create_kwargs))
 
     return cast(

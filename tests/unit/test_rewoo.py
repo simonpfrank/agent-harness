@@ -6,10 +6,10 @@ from agent_harness.loops.rewoo import _parse_tool_calls, run
 from agent_harness.types import AgentConfig, Message, Response, ToolCall, ToolResult, Usage
 
 
-def _config() -> AgentConfig:
+def _config(stream: bool = False) -> AgentConfig:
     return AgentConfig(
         name="test", provider="anthropic", model="test",
-        agent_dir="/tmp/test", instructions="test", max_turns=10,
+        agent_dir="/tmp/test", instructions="test", max_turns=10, stream=stream,
     )
 
 
@@ -62,3 +62,13 @@ class TestReWOOLoop:
     def test_registered(self) -> None:
         from agent_harness.loops import registry
         assert "rewoo" in registry
+
+    def test_forwards_stream_flag(self) -> None:
+        tc = ToolCall(id="tc_1", name="read_file", arguments={"path": "x"})
+        plan_resp = _response("reading", tool_calls=[tc])
+        solve_resp = _response("done")
+        chat_fn = MagicMock(side_effect=[plan_resp, solve_resp])
+        messages = [Message(role="user", content="read x")]
+        run(chat_fn, messages, [{"name": "read_file"}], _config(stream=True))
+        for call in chat_fn.call_args_list:
+            assert call.kwargs["stream"] is True

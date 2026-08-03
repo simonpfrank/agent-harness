@@ -22,6 +22,10 @@ def _message_to_dict(msg: Message) -> dict[str, Any]:
         Dict representation.
     """
     data: dict[str, Any] = {"role": msg.role, "content": msg.content}
+    if msg.thinking is not None:
+        data["thinking"] = msg.thinking
+    if msg.thinking_blocks is not None:
+        data["thinking_blocks"] = msg.thinking_blocks
     if msg.tool_calls:
         data["tool_calls"] = [
             {"id": tc.id, "name": tc.name, "arguments": tc.arguments}
@@ -64,6 +68,8 @@ def _dict_to_message(data: dict[str, Any]) -> Message:
         content=data.get("content"),
         tool_calls=tool_calls,
         tool_result=tool_result,
+        thinking=data.get("thinking"),
+        thinking_blocks=data.get("thinking_blocks"),
     )
 
 

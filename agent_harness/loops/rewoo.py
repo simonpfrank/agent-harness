@@ -48,7 +48,7 @@ def run(
     cb = callbacks or LoopCallbacks()
 
     # Phase 1: Plan — LLM sees tools and produces tool calls
-    plan_response = chat_fn(messages, tool_schemas, model=config.model, **config.provider_kwargs)
+    plan_response = chat_fn(messages, tool_schemas, model=config.model, stream=config.stream, **config.provider_kwargs)
     messages.append(plan_response.message)
     if cb.on_response:
         cb.on_response(plan_response)
@@ -65,7 +65,7 @@ def run(
             messages.append(Message(role="tool", tool_result=result))
 
     # Phase 3: Solve — LLM sees all results, no tools
-    solve_response = chat_fn(messages, [], model=config.model, **config.provider_kwargs)
+    solve_response = chat_fn(messages, [], model=config.model, stream=config.stream, **config.provider_kwargs)
     messages.append(solve_response.message)
     if cb.on_response:
         cb.on_response(solve_response)

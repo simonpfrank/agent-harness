@@ -42,6 +42,19 @@ class TestSaveAndLoad:
         assert loaded[1].tool_result.output == "file data"
         Path(path).unlink()
 
+    def test_round_trip_with_thinking(self) -> None:
+        blocks = [{"type": "thinking", "thinking": "let me think", "signature": "sig123"}]
+        msgs = [
+            Message(role="assistant", content="the answer", thinking="let me think", thinking_blocks=blocks),
+        ]
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+        save_session(msgs, path)
+        loaded = load_session(path)
+        assert loaded[0].thinking == "let me think"
+        assert loaded[0].thinking_blocks == blocks
+        Path(path).unlink()
+
     def test_missing_file_returns_empty(self) -> None:
         loaded = load_session("/nonexistent/path.json")
         assert loaded == []

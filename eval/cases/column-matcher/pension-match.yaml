@@ -1,0 +1,13 @@
+id: pension-column-match
+agent: agents/column-matcher
+prompt: >-
+  Match columns between data/pension_input.xlsx (incoming) and
+  data/pension_reference.xlsx (reference). Read data/context.md for domain
+  terms. Write the final JSON result to
+  data/eval_runs/{cell_id}_r{run_index}.json.
+output_file: "data/eval_runs/{cell_id}_r{run_index}.json"
+graders:
+  - name: column_match
+    kind: gate
+    args:
+      expected: data/expected_matches.json

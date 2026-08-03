@@ -2,6 +2,7 @@
 
 from agent_harness.types import (
     AgentConfig,
+    LoopCallbacks,
     Message,
     OnBudget,
     OnResponse,
@@ -50,6 +51,17 @@ class TestMessage:
         m = Message(role="tool", tool_result=tr)
         assert m.tool_result == tr
 
+    def test_thinking_defaults_to_none(self) -> None:
+        m = Message(role="assistant", content="hi")
+        assert m.thinking is None
+        assert m.thinking_blocks is None
+
+    def test_thinking_fields(self) -> None:
+        blocks = [{"type": "thinking", "thinking": "reasoning...", "signature": "sig"}]
+        m = Message(role="assistant", content="hi", thinking="reasoning...", thinking_blocks=blocks)
+        assert m.thinking == "reasoning..."
+        assert m.thinking_blocks == blocks
+
 
 class TestUsage:
     def test_construction(self) -> None:
@@ -82,6 +94,8 @@ class TestAgentConfig:
         assert cfg.permissions == {}
         assert cfg.hooks == {}
         assert cfg.tools_guidance is None
+        assert cfg.stream is False
+        assert cfg.show_thinking is False
 
 
 class TestCallbackAliases:
@@ -90,3 +104,26 @@ class TestCallbackAliases:
         assert OnResponse is not None
         assert OnToolCall is not None
         assert OnBudget is not None
+
+
+class TestLoopCallbacks:
+    def test_delta_callbacks_default_to_none(self) -> None:
+        cb = LoopCallbacks()
+        assert cb.on_delta is None
+        assert cb.on_thinking_delta is None
+
+    def test_delta_callbacks_take_agent_id_and_chunk(self) -> None:
+        received: list[tuple[str, str, str]] = []
+
+        def record_delta(agent_id: str, chunk: str) -> None:
+            received.append(("delta", agent_id, chunk))
+
+        def record_thinking(agent_id: str, chunk: str) -> None:
+            received.append(("thinking", agent_id, chunk))
+
+        cb = LoopCallbacks(on_delta=record_delta, on_thinking_delta=record_thinking)
+        assert cb.on_delta is not None
+        assert cb.on_thinking_delta is not None
+        cb.on_delta("default", "hi")
+        cb.on_thinking_delta("default", "hmm")
+        assert received == [("delta", "default", "hi"), ("thinking", "default", "hmm")]

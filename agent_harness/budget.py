@@ -55,6 +55,16 @@ class Budget:
             return True
         return self._max_cost is not None and self._total_cost >= self._max_cost
 
+    @property
+    def turns(self) -> int:
+        """Turns recorded so far."""
+        return self._turns
+
+    @property
+    def total_cost(self) -> float:
+        """Estimated USD cost accumulated so far."""
+        return self._total_cost
+
     def summary(self) -> str:
         """Human-readable budget status.
 

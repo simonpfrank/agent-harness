@@ -5,7 +5,9 @@ from unittest.mock import patch
 from agent_harness.display import (
     prompt_user,
     show_budget,
+    show_delta,
     show_response,
+    show_thinking_delta,
     show_tool_call,
     show_tool_result,
 )
@@ -43,6 +45,16 @@ class TestShowToolResult:
 class TestShowBudget:
     def test_no_crash(self) -> None:
         show_budget("Turn 1/10 | $0.0012")
+
+
+class TestShowDelta:
+    def test_no_crash(self) -> None:
+        show_delta("Hello")
+
+
+class TestShowThinkingDelta:
+    def test_no_crash(self) -> None:
+        show_thinking_delta("pondering...")
 
 
 class TestPromptUser:

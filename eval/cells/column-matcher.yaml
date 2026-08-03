@@ -1,0 +1,9 @@
+# H0 vs H4 from docs/matcher_experiments.md — baseline vs temperature=0,
+# already shown by hand to reduce stdev without changing accuracy.
+- id: H0-haiku
+  agent: agents/column-matcher
+  model: claude-haiku-4-5-20251001
+- id: H4-haiku-temp0
+  agent: agents/column-matcher
+  model: claude-haiku-4-5-20251001
+  temperature: 0.0

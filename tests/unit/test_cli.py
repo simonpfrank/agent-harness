@@ -43,6 +43,26 @@ class TestParseArgs:
         args = parse_args(["run", "./agents/hello", "--temperature", "0.0"])
         assert args.temperature == 0.0
 
+    def test_stream_flag(self) -> None:
+        args = parse_args(["run", "./agents/hello", "--stream"])
+        assert args.stream is True
+
+    def test_no_stream_flag(self) -> None:
+        args = parse_args(["run", "./agents/hello", "--no-stream"])
+        assert args.stream is False
+
+    def test_stream_flag_default_none(self) -> None:
+        args = parse_args(["run", "./agents/hello"])
+        assert args.stream is None
+
+    def test_show_thinking_flag(self) -> None:
+        args = parse_args(["run", "./agents/hello", "--show-thinking"])
+        assert args.show_thinking is True
+
+    def test_no_show_thinking_flag(self) -> None:
+        args = parse_args(["run", "./agents/hello", "--no-show-thinking"])
+        assert args.show_thinking is False
+
 
 class TestApplyOverrides:
     def _base_config(self) -> AgentConfig:
@@ -73,6 +93,21 @@ class TestApplyOverrides:
     def test_loop_override(self) -> None:
         args = parse_args(["run", "./agents/hello", "--loop", "reflection"])
         assert args.loop == "reflection"
+
+    def test_stream_override(self) -> None:
+        config = self._base_config()
+        _apply_overrides(config, {"stream": True})
+        assert config.stream is True
+
+    def test_show_thinking_override(self) -> None:
+        config = self._base_config()
+        _apply_overrides(config, {"show_thinking": True})
+        assert config.show_thinking is True
+
+    def test_no_stream_override_leaves_default(self) -> None:
+        config = self._base_config()
+        _apply_overrides(config, {"stream": None})
+        assert config.stream is False
 
     def test_no_overrides_default_none(self) -> None:
         args = parse_args(["run", "./agents/hello"])
@@ -126,6 +161,22 @@ class TestValidateConfig:
     def test_bad_max_turns(self) -> None:
         with pytest.raises(ValueError, match="max_turns"):
             validate_config(_valid_config(max_turns=0))
+
+    def test_stream_on_anthropic_passes(self) -> None:
+        validate_config(_valid_config(provider="anthropic", stream=True))
+
+    def test_stream_on_openai_passes(self) -> None:
+        validate_config(_valid_config(provider="openai", stream=True))
+
+    def test_stream_on_openai_with_base_url_rejected(self) -> None:
+        with pytest.raises(ValueError, match="stream"):
+            validate_config(_valid_config(
+                provider="openai", stream=True, provider_kwargs={"base_url": "http://localhost:1234/v1"},
+            ))
+
+    def test_thinking_on_non_anthropic_provider_rejected(self) -> None:
+        with pytest.raises(ValueError, match="thinking"):
+            validate_config(_valid_config(provider="openai", provider_kwargs={"thinking": {"budget_tokens": 2000}}))
 
 
 class TestRunAgent:

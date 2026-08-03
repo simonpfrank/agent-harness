@@ -48,6 +48,24 @@ def show_tool_result(result: ToolResult) -> None:
         console.print(Panel(truncated, title="Result", border_style="green"))
 
 
+def show_delta(text: str) -> None:
+    """Print an incremental text chunk as it streams in, without a newline.
+
+    Args:
+        text: Text delta to append to the current line.
+    """
+    console.print(text, end="")
+
+
+def show_thinking_delta(text: str) -> None:
+    """Print an incremental thinking chunk, dim-styled to distinguish it from the answer.
+
+    Args:
+        text: Thinking text delta to append to the current line.
+    """
+    console.print(f"[dim]{text}[/dim]", end="")
+
+
 def show_budget(summary: str) -> None:
     """Display budget status as a dim line.
 

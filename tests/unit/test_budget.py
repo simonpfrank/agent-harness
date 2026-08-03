@@ -57,6 +57,20 @@ class TestBudgetSummary:
         assert "$" in summary  # cost
 
 
+class TestBudgetRawProperties:
+    def test_turns_and_total_cost_start_at_zero(self) -> None:
+        budget = Budget(_config())
+        assert budget.turns == 0
+        assert budget.total_cost == 0.0
+
+    def test_turns_and_total_cost_after_recording(self) -> None:
+        budget = Budget(_config(max_turns=10))
+        budget.record(Usage(input_tokens=1000, output_tokens=1000))
+        budget.record(Usage(input_tokens=1000, output_tokens=1000))
+        assert budget.turns == 2
+        assert budget.total_cost > 0.0
+
+
 class TestSupportedOpenAICosts:
     def test_supported_openai_models_have_cost_entries(self) -> None:
         expected_models = {

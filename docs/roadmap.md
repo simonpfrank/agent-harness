@@ -68,9 +68,9 @@ The react loop does not tell the model how many turns or how much budget remain.
 
 Connect agents to external tools via [Model Context Protocol](https://modelcontextprotocol.io/). Scope: MCP client in the harness, config to point at MCP servers, tools auto-discovered from server capabilities.
 
-### Evaluation framework (added 2026-04-16)
+### Evaluation framework (added 2026-04-16, shipped 2026-08-03)
 
-Run agents against test cases and score quality. A formal framework would add test case definitions, scoring functions, and regression detection beyond scripted CLI runs.
+Run agents against test cases and score quality. Shipped as the `eval/` package — test case definitions, pluggable code + model graders with a gate/signal split, JSONL storage, and a ranked leaderboard. Replaces the ad hoc `scripts/run_experiment.py` pattern; `scripts/score_run.py`'s comparison logic was reused, not rewritten, as the `column_match` grader. Design doc: `docs/eval_framework.md`. Deferred: extending it to benchmark external coding assistants (Claude Code, Codex CLI, Copilot) via a `Subject` abstraction — captured in that doc, not built.
 
 ### Lazy tool schema loading (added 2026-04-16)
 
@@ -81,6 +81,59 @@ Send a compact list of tool names and descriptions first, then load full schemas
 ## Ideas
 
 These are captured so they are not lost. They are not commitments.
+
+### Converging priorities over the next month or so (added 2026-08-03)
+
+Context, not a build item — captured so it can inform prioritization as it
+firms up, not acted on yet.
+
+- **Courses this month** — expect learnings from these to feed back into
+  framework improvements as they land; nothing specific identified yet.
+- **AI Prototyping Program at work (starts ~1 month out)** — wants to use
+  this framework to prototype quickly there. Reinforces the framework's
+  original intent ("bootstrap a new agent quickly") rather than pointing at
+  a new capability — anything that makes spinning up/iterating on a new
+  agent faster is well-aligned.
+- **AI Task Force, same ~1-month horizon** — curiosity about what it takes
+  to build a coding agent that can build workflows, using MCP tools already
+  available at work. Not a commitment to build one — wants to understand
+  it. Gives the existing `MCP support` idea (below) a concrete motivation
+  and rough timeline it didn't have before.
+- **Reachy Mini personal assistant (home, conditional on buying the robot)**
+  — a body-doubling / personal-organisation assistant, connected to a
+  physical robot (camera, voice, expressive movement). Most speculative and
+  furthest out of the four. Different application shape than the other
+  three — embodied, voice-first, personal rather than coding-task-oriented.
+
+### prompt caching
+
+### Will ```JSON catch us out
+
+### Check multi turn vs one shot
+
+### api
+rest and mcp ?
+plus buid chat app?
+
+### RAG framework/tools (added 2026-08-03)
+
+**Status:** Active roadmap design
+
+**What:** Retrieval-augmented generation as a tool by default (agent decides
+when to retrieve), with an opt-in config-driven pre-loop injection path for
+dedicated knowledge agents. Chroma (embedded/local) as the default vector
+provider, Weaviate as a production/hybrid-search option. Phased: plain text
+first, PDF mining and multimodal deferred until there's a reason to take
+them on.
+
+**Why:** No RAG/embedding capability exists in the harness today — every
+agent is limited to what fits directly in its prompt or what a tool reads
+verbatim.
+
+**Scope in roadmap terms:** start with the smallest useful slice (text +
+tool + Chroma), not the full design at once.
+
+**Deep-dive design:** `docs/rag-plan.md`
 
 ### Identity / procedure split (added 2026-04-16)
 

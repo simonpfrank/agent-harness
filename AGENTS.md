@@ -55,6 +55,8 @@ Unless told otherwise you should ALWAYS follow the following workflow. If the us
 9. When integration tests pass, run automated quality checks (ALL must pass):
    - pylint/ruff (code quality - no violations)
    - mypy --strict (type safety - 100% coverage)
+   - pyright (additional type-checking pass)
+   - vulture --min-confidence 60 (dead code detection)
    - radon cc --min C (complexity - no functions rated D or worse)
    - pytest --cov (90%+ branch coverage required)
    - Security audit (no shell=True, input validation present, no secrets in code)
@@ -139,12 +141,14 @@ TDD must be followed for new functionality, changes and bug fixing.
 - `pylint --max-line-length=119 --max-module-lines=500` or ruff equivalent
 - `radon cc --min C` (complexity checker)
 - `mypy --strict` (type checking)
+- `pyright` (additional type-checking pass)
+- `vulture --min-confidence 60` (dead code detection)
 
 ## Important Principles
 Try to stick to these without adding complexity. Code should always be easy to read
 - Single responsibility
-- Avoid Dependency Inversion
-- Open/Closed Principle
+- Avoid over-using Dependency Injection / DI frameworks
+- Open/Closed: extend behaviour via composition, not by patching existing classes
 - BDD testing for user interaction
 - Avoid mutable dicts for things like state
 

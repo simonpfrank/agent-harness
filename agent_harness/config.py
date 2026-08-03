@@ -75,4 +75,6 @@ def load(agent_dir: str) -> AgentConfig:
         provider_kwargs=raw.get("provider_kwargs", {}),
         permissions=raw.get("permissions", {}),
         hooks=raw.get("hooks", {}),
+        stream=raw.get("stream", False),
+        show_thinking=raw.get("show_thinking", False),
     )

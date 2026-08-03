@@ -12,7 +12,7 @@ from agent_harness.types import (
 )
 
 
-def _config(max_turns: int = 10) -> AgentConfig:
+def _config(max_turns: int = 10, stream: bool = False) -> AgentConfig:
     return AgentConfig(
         name="test",
         provider="anthropic",
@@ -20,6 +20,7 @@ def _config(max_turns: int = 10) -> AgentConfig:
         agent_dir="/tmp/test",
         instructions="test",
         max_turns=max_turns,
+        stream=stream,
     )
 
 
@@ -101,3 +102,13 @@ class TestPlanExecuteLoop:
     def test_registered_in_loop_registry(self) -> None:
         from agent_harness.loops import registry
         assert "plan_execute" in registry
+
+    def test_forwards_stream_flag(self) -> None:
+        plan_response = _response("1. Do it")
+        step_response = _response("done")
+        summary_response = _response("all done")
+        chat_fn = MagicMock(side_effect=[plan_response, step_response, summary_response])
+        messages = [Message(role="user", content="go")]
+        run(chat_fn, messages, [], _config(stream=True))
+        for call in chat_fn.call_args_list:
+            assert call.kwargs["stream"] is True

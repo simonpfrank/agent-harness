@@ -1,8 +1,11 @@
-## Last Session (2026-04-16)
-**Status:** Ready for Next Phase
-**Working on:** OpenAI provider hardening for supported text models
-**Next step:** Challenge and refine `docs/streaming-plan.md`
-**Notes:** The OpenAI provider now routes supported hosted text models through Responses, keeps Chat Completions fallback for custom `base_url` backends, rejects excluded hosted models clearly, and includes GPT-5 cost/context metadata. The temporary OpenAI provider plan doc has been removed after implementation. Verified test state is `.venv/bin/pytest tests/unit -q` -> `305 passed in 1.65s`, host `.venv/bin/pytest tests/integration -q` -> `60 passed in 66.98s (0:01:06)`, `.venv/bin/ruff check .` -> `All checks passed!`, and `env MYPYPATH=. .venv/bin/mypy --explicit-package-bases --exclude '^(build|dist)/' agent_harness tests tools scripts` -> `Success: no issues found in 76 source files`.
+## Last Session (2026-08-03)
+**Status:** In Progress
+**Working on:** New `eval/` package — general-purpose evaluation framework (test cases, code + model graders with gate/signal split, JSONL storage, ranked leaderboard report), replacing the ad hoc `scripts/run_experiment.py` pattern. Plan approved and saved at `/Users/simonfrank/.claude/plans/abstract-doodling-wren.md`. Streaming + extended thinking work (Anthropic + OpenAI-modern) from earlier this session is done — see the plan file history / `docs/streaming-plan.md` for that.
+**Next step:** Build order per the plan: `eval/types.py` -> `Budget`/`PreparedRuntime` additive changes -> `eval/storage.py` -> `eval/cases.py` -> `eval/graders/code/*` + discovery -> `eval/graders/model.py` -> `eval/runner.py` -> `eval/report.py` -> `eval/cli.py` -> `docs/eval_framework.md` + `docs/roadmap.md` update -> capstone column-matcher suite + real run.
+**Notes:** `column_match` grader reuses `scripts/score_run.py::score()` almost verbatim (per user's explicit ask for "a matcher evaluator in the new approach") rather than reimplementing comparison logic. `eval/` is a sibling top-level package, not inside `agent_harness/` — deliberate, matches how `scripts/` already consumes the framework rather than extending it.
+**Notes:** Resolves `docs/streaming-plan.md`'s outstanding decisions #1 and #3. `on_delta`/`on_thinking_delta` callbacks take `(agent_id, chunk)` to match the roadmap's L3 sink design without a future breaking change; parallel-agent/RunContext work itself is explicitly out of scope. Extended thinking stays Anthropic-only (OpenAI has no readable reasoning-content extraction, only the pre-existing `reasoning_effort` knob). Streaming is now valid for `anthropic` and `openai` (Responses API models only — rejected for OpenAI's Chat Completions/`base_url` path, both at the provider boundary and in `validate_config`).
+Verified: `.venv/bin/pytest tests/unit -q` (excluding two pre-existing unrelated failures in test_value_overlap.py/test_profile_data.py from a missing openpyxl/expat dependency) -> `326 passed`. `.venv/bin/ruff check agent_harness tests` -> `All checks passed!`. `env MYPYPATH=. .venv/bin/mypy --strict --explicit-package-bases agent_harness tests` -> `Success: no issues found in 71 source files`. `radon cc --min D agent_harness` -> only the pre-existing accepted D (`_to_anthropic_messages`), no new D/worse.
+Integration: Anthropic streaming + thinking real-API tests pass (`tests/integration/test_end_to_end.py::TestStreamingIntegration`, 2/2). Full `tests/integration -q` run: `56 passed, 6 failed`, all 6 pre-existing OpenAI failures from `insufficient_quota` (account has no credits), unrelated to code. The new OpenAI streaming integration test (`TestOpenAIStreamingIntegration`) was written and run but also hit `insufficient_quota` — the error was a retryable `api_error` (429), not `BadRequestError`, meaning the request reached OpenAI correctly shaped; it just couldn't complete. **Not fully integration-verified end-to-end** — revisit once the OpenAI account has credits.
 
 ---
 
@@ -85,3 +88,69 @@
 - radon cc --min C: ✅ 1 D-rated function (acceptable — Anthropic message translation)
 - Tests: ✅ 296 total (240 unit + 56 integration)
 - Integration mock check: ✅ Zero mocks in tests/integration/
+
+## Phase 7 — Streaming and Extended Thinking ✅
+
+| Component | Unit Tests | Code | Integration Tests |
+|-----------|-----------|------|-------------------|
+| Anthropic streaming + thinking | ✅ (25) | ✅ | ✅ (2) |
+| OpenAI-modern streaming (Responses API) | ✅ (28) | ✅ | 🟡 written, blocked on account credits |
+| LoopCallbacks on_delta/on_thinking_delta | ✅ | ✅ | ✅ (via providers) |
+| stream/show_thinking config + CLI flags | ✅ | ✅ | ⏭️ N/A |
+| Session persistence of thinking blocks | ✅ | ✅ | ⏭️ N/A |
+
+### Quality Gates
+- ruff: ✅ All checks passed
+- mypy --strict: ✅ No issues (71 files)
+- radon cc --min D: ✅ same 1 accepted D as before, no regression
+- Tests: 326 unit passed (2 pre-existing unrelated failures excluded), 56 integration passed / 6 failed (OpenAI `insufficient_quota`, account issue not code)
+
+## Phase 8 — Evaluation Framework (`eval/`) 🟡 In Progress
+
+| Component | Unit Tests | Code | Integration Tests |
+|-----------|-----------|------|-------------------|
+| eval/types.py | ✅ (7) | ✅ | ⏭️ N/A |
+| Budget/PreparedRuntime additions | ✅ (3) | ✅ | ⏭️ N/A |
+| eval/storage.py | ✅ (5) | ✅ | ⏭️ N/A |
+| eval/cases.py | ✅ (5) | ✅ | ⏭️ N/A |
+| eval/graders/code (+ discovery) | ✅ (11) | ✅ | ⏭️ N/A |
+| eval/graders/model.py | ✅ (4) | ✅ | ⏭️ N/A |
+| eval/runner.py | ✅ (12) | ✅ | ❌ |
+| eval/report.py | ✅ (13) | ✅ | ⏭️ N/A |
+| eval/cli.py | ✅ (9) | ✅ | ⏭️ N/A |
+| Column-matcher capstone suite | ⏭️ N/A | ✅ | ✅ (1, real API, H0 + H4 cells) |
+
+### Environment fix (2026-08-03)
+
+The capstone's first real run failed — not a code bug, but a pre-existing
+`expat` C-extension mismatch on the Python 3.14.5 Homebrew bottle (linked
+against macOS's system `libexpat`, missing a symbol `pyexpat` expected —
+macOS 26.2's bundled libexpat hasn't caught up). This broke `openpyxl`/
+`pandas.read_excel` entirely, which is why `test_value_overlap.py` and part
+of `test_profile_data.py` were already failing/excluded all session before
+this was even diagnosed. **Fix:** recreated `.venv` against `python@3.13`
+(already installed via Homebrew, confirmed working `pyexpat`) — old venv
+preserved at `.venv-py314-backup` pending cleanup. Reinstalled via
+`pip install -e ".[dev]"` plus `pandas`/`openpyxl`/`pandas-stubs`. This
+picked up newer unpinned versions of several deps (anthropic 0.89→0.120,
+openai 2.30→2.52, mypy 1.20→2.3, pytest/ruff/rich bumped) — verified none of
+this broke anything already built. One follow-on issue: numpy's latest
+release (2.5.1) ships stubs using Python 3.12+ `type` statement syntax,
+which fails mypy's `python_version = "3.11"` target (`pyproject.toml`) —
+pinned `numpy==2.4.4` (previously-working version) to resolve; unrelated to
+the Python 3.13 switch itself.
+
+**Verified on the fixed environment:**
+- `.venv/bin/pytest tests/unit -q` → `428 passed` (no exclusions needed —
+  `test_value_overlap.py`/`test_profile_data.py` pass now too).
+- `.venv/bin/ruff check agent_harness eval tests` → `All checks passed!`
+- `env MYPYPATH=. .venv/bin/mypy --strict --explicit-package-bases agent_harness eval tests` → `Success: no issues found in 92 source files`
+- `.venv/bin/pytest tests/integration -q` → `57 passed, 7 failed` — all 7
+  failures are OpenAI `insufficient_quota` (account credits), unrelated.
+  Every Anthropic-backed test passed, including the new capstone.
+
+### Quality Gates (core eval/ package)
+- ruff: ✅ All checks passed
+- mypy --strict: ✅ No issues (92 files)
+- radon cc --min D: ✅ same 1 pre-existing accepted D, no new D/worse (`discover_code_graders`/`summarize` both C, matching `discover_tools`'s own C rating)
+- Tests: ✅ 428 unit passed, 57 integration passed (7 OpenAI-credit failures excluded, unrelated)

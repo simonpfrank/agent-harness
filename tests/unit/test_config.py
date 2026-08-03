@@ -6,6 +6,7 @@ from agent_harness.config import load
 
 VALID = "tests/data/valid_agent"
 NO_INSTRUCTIONS = "tests/data/invalid_agent_no_instructions"
+STREAMING = "tests/data/streaming_agent"
 
 
 class TestLoadValid:
@@ -39,6 +40,17 @@ class TestLoadValid:
     def test_agent_dir_set(self) -> None:
         cfg = load(VALID)
         assert cfg.agent_dir == VALID
+
+    def test_stream_and_show_thinking_default_false(self) -> None:
+        cfg = load(VALID)
+        assert cfg.stream is False
+        assert cfg.show_thinking is False
+
+    def test_loads_stream_and_show_thinking(self) -> None:
+        cfg = load(STREAMING)
+        assert cfg.stream is True
+        assert cfg.show_thinking is True
+        assert cfg.provider_kwargs["thinking"] == {"budget_tokens": 2000}
 
 
 class TestLoadInvalid:

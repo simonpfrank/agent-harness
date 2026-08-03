@@ -43,7 +43,7 @@ def run(
         # Argument FOR
         for_messages = list(transcript)
         for_messages.append(Message(role="user", content=_FOR_PROMPT))
-        for_response = chat_fn(for_messages, [], model=config.model, **config.provider_kwargs)
+        for_response = chat_fn(for_messages, [], model=config.model, stream=config.stream, **config.provider_kwargs)
         transcript.append(for_response.message)
         if cb.on_response:
             cb.on_response(for_response)
@@ -53,7 +53,9 @@ def run(
         # Argument AGAINST
         against_messages = list(transcript)
         against_messages.append(Message(role="user", content=_AGAINST_PROMPT))
-        against_response = chat_fn(against_messages, [], model=config.model, **config.provider_kwargs)
+        against_response = chat_fn(
+            against_messages, [], model=config.model, stream=config.stream, **config.provider_kwargs,
+        )
         transcript.append(against_response.message)
         if cb.on_response:
             cb.on_response(against_response)
@@ -62,7 +64,7 @@ def run(
 
     # Synthesise
     transcript.append(Message(role="user", content=_SYNTH_PROMPT))
-    synth_response = chat_fn(transcript, [], model=config.model, **config.provider_kwargs)
+    synth_response = chat_fn(transcript, [], model=config.model, stream=config.stream, **config.provider_kwargs)
     messages.clear()
     messages.extend(transcript)
     messages.append(synth_response.message)

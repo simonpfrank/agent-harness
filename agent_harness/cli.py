@@ -61,6 +61,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     run_parser.add_argument("--tool-timeout", type=int, default=None, help="Override tool timeout")
     run_parser.add_argument("--max-output-chars", type=int, default=None, help="Override max output chars")
     run_parser.add_argument("--temperature", type=float, default=None, help="Override sampling temperature")
+    run_parser.add_argument(
+        "--stream", action=argparse.BooleanOptionalAction, default=None, help="Override streaming (anthropic only)",
+    )
+    run_parser.add_argument(
+        "--show-thinking",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Override whether extended thinking is displayed",
+    )
 
     init_parser = sub.add_parser("init", help="Create a new agent")
     init_parser.add_argument("name", help="Agent name")
@@ -200,6 +209,8 @@ def main() -> None:
             "tool_timeout": args.tool_timeout,
             "max_output_chars": args.max_output_chars,
             "temperature": args.temperature,
+            "stream": args.stream,
+            "show_thinking": args.show_thinking,
         }
         run_agent(args.agent_dir, prompt=args.prompt, session=args.session, verbose=args.verbose, overrides=overrides)
     elif args.command == "init":

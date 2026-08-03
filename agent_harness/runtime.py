@@ -10,7 +10,9 @@ from typing import Any
 from agent_harness.budget import Budget
 from agent_harness.display import (
     show_budget,
+    show_delta,
     show_response,
+    show_thinking_delta,
     show_tool_call,
     show_tool_result,
 )
@@ -52,6 +54,7 @@ class PreparedRuntime:
         callbacks: Loop callbacks for display, tool execution, and budget handling.
         permissions: Permission manager for the current run.
         tracer: Structured trace sink, or a no-op tracer when tracing is disabled.
+        budget: Turn/cost tracker for this run.
     """
 
     config: AgentConfig
@@ -62,6 +65,7 @@ class PreparedRuntime:
     callbacks: LoopCallbacks
     permissions: Permissions
     tracer: Tracer | _NullTracer
+    budget: Budget
 
     def init_messages(
         self,
@@ -176,6 +180,13 @@ def validate_config(
         raise ValueError(f"Unknown loop: {config.loop}")
     if config.max_turns < 1:
         raise ValueError(f"max_turns must be > 0, got {config.max_turns}")
+    if config.stream:
+        if config.provider not in ("anthropic", "openai"):
+            raise ValueError(f"stream is not supported for provider '{config.provider}'")
+        if config.provider == "openai" and "base_url" in config.provider_kwargs:
+            raise ValueError("stream is not supported for OpenAI Chat Completions (custom base_url) backends")
+    if "thinking" in config.provider_kwargs and config.provider != "anthropic":
+        raise ValueError(f"thinking is only supported for the anthropic provider, got '{config.provider}'")
 
 
 def deny_permission(_tool_call: ToolCall) -> PermissionDecision:
@@ -198,9 +209,19 @@ def _make_callbacks(
     tool_registry: dict[str, Callable[..., str]],
     max_output_chars: int,
     show_output: bool,
+    stream: bool = False,
+    show_thinking: bool = False,
 ) -> LoopCallbacks:
-    def on_response(response: Response) -> None:
+    def on_delta(_agent_id: str, text: str) -> None:
         if show_output:
+            show_delta(text)
+
+    def on_thinking_delta(_agent_id: str, text: str) -> None:
+        if show_output and show_thinking:
+            show_thinking_delta(text)
+
+    def on_response(response: Response) -> None:
+        if show_output and not stream:
             show_response(response)
         tracer.record(
             "turn",
@@ -241,7 +262,13 @@ def _make_callbacks(
         tracer.record("budget", summary=budget.summary())
         return exceeded
 
-    return LoopCallbacks(on_response=on_response, on_tool_call=on_tool_call, on_budget=on_budget)
+    return LoopCallbacks(
+        on_response=on_response,
+        on_tool_call=on_tool_call,
+        on_budget=on_budget,
+        on_delta=on_delta,
+        on_thinking_delta=on_thinking_delta,
+    )
 
 
 def prepare_runtime(
@@ -302,6 +329,8 @@ def prepare_runtime(
         tool_registry,
         config.max_output_chars,
         show_output,
+        stream=config.stream,
+        show_thinking=config.show_thinking,
     )
     chat_fn = provider_registry[config.provider]
     loop_fn = loop_registry[config.loop]
@@ -315,4 +344,5 @@ def prepare_runtime(
         callbacks=callbacks,
         permissions=permissions,
         tracer=tracer,
+        budget=budget,
     )

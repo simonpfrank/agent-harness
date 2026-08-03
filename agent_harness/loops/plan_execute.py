@@ -60,7 +60,7 @@ def run(
     task = messages[-1].content or "" if messages else ""
     plan_messages = list(messages)
     plan_messages.append(Message(role="user", content=task + _PLAN_PROMPT_SUFFIX))
-    plan_response = chat_fn(plan_messages, [], model=config.model, **config.provider_kwargs)
+    plan_response = chat_fn(plan_messages, [], model=config.model, stream=config.stream, **config.provider_kwargs)
     messages.append(plan_response.message)
     if cb.on_response:
         cb.on_response(plan_response)
@@ -81,7 +81,7 @@ def run(
 
     # Phase 3: Summarise
     messages.append(Message(role="user", content="Summarise what was accomplished."))
-    summary_response = chat_fn(messages, [], model=config.model, **config.provider_kwargs)
+    summary_response = chat_fn(messages, [], model=config.model, stream=config.stream, **config.provider_kwargs)
     messages.append(summary_response.message)
     if cb.on_response:
         cb.on_response(summary_response)

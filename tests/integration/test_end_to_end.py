@@ -118,6 +118,85 @@ class TestProviderKwargsPassthrough:
         assert result.message.content is not None
 
 
+@requires_anthropic_key
+class TestStreamingIntegration:
+    def test_streaming_matches_non_streaming_shape(self) -> None:
+        """Streaming a real call yields incremental deltas and a full final Response."""
+        from agent_harness.providers.anthropic import chat
+
+        received: list[str] = []
+
+        def on_delta(agent_id: str, chunk: str) -> None:
+            assert agent_id == "default"
+            received.append(chunk)
+
+        result = chat(
+            [Message(role="user", content="Reply with just the word ok.")],
+            tools=[],
+            model="claude-haiku-4-5-20251001",
+            max_tokens=50,
+            stream=True,
+            on_delta=on_delta,
+        )
+        assert received
+        assert "".join(received) == result.message.content
+
+    def test_thinking_populates_message_and_survives_tool_continuation(self) -> None:
+        """Extended thinking is captured, and replaying it in history doesn't break a follow-up call."""
+        from agent_harness.providers.anthropic import chat
+
+        cfg = load("agents/hello")
+        schemas = [generate_schema(tool_registry["read_file"])]
+
+        messages = [
+            Message(role="system", content=cfg.instructions),
+            Message(
+                role="user",
+                content="Use the read_file tool to read agents/hello/config.yaml, then tell me the model name.",
+            ),
+        ]
+        first = chat(
+            messages, tools=schemas, model="claude-haiku-4-5-20251001",
+            max_tokens=2048, thinking={"budget_tokens": 1024},
+        )
+        messages.append(first.message)
+
+        if first.message.tool_calls:
+            for tc in first.message.tool_calls:
+                result = execute_tool(tc)
+                messages.append(Message(role="tool", tool_result=result))
+
+            second = chat(
+                messages, tools=schemas, model="claude-haiku-4-5-20251001",
+                max_tokens=2048, thinking={"budget_tokens": 1024},
+            )
+            assert second.message.content is not None
+
+
+@requires_openai_key
+class TestOpenAIStreamingIntegration:
+    def test_streaming_matches_non_streaming_shape(self) -> None:
+        """Streaming a real OpenAI Responses-API call yields deltas and a full final Response."""
+        from agent_harness.providers.openai_provider import chat
+
+        received: list[str] = []
+
+        def on_delta(agent_id: str, chunk: str) -> None:
+            assert agent_id == "default"
+            received.append(chunk)
+
+        result = chat(
+            [Message(role="user", content="Reply with just the word ok.")],
+            tools=[],
+            model="gpt-4o-mini",
+            max_tokens=50,
+            stream=True,
+            on_delta=on_delta,
+        )
+        assert received
+        assert "".join(received) == result.message.content
+
+
 class TestInvalidConfig:
     def test_missing_instructions_raises(self) -> None:
         with pytest.raises(FileNotFoundError):

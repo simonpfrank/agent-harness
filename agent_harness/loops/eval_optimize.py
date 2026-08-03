@@ -65,7 +65,9 @@ def run(
 
         # Evaluate — pass tool_schemas so API accepts tool_use in history
         messages.append(Message(role="user", content=_EVAL_PROMPT))
-        eval_response = chat_fn(messages, tool_schemas, model=config.model, **config.provider_kwargs)
+        eval_response = chat_fn(
+            messages, tool_schemas, model=config.model, stream=config.stream, **config.provider_kwargs,
+        )
         messages.append(eval_response.message)
         if cb.on_budget and cb.on_budget(eval_response.usage):
             break

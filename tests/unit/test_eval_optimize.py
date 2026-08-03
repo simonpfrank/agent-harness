@@ -6,10 +6,10 @@ from agent_harness.loops.eval_optimize import _extract_score, run
 from agent_harness.types import AgentConfig, Message, Response, Usage
 
 
-def _config() -> AgentConfig:
+def _config(stream: bool = False) -> AgentConfig:
     return AgentConfig(
         name="test", provider="anthropic", model="test",
-        agent_dir="/tmp/test", instructions="test", max_turns=10,
+        agent_dir="/tmp/test", instructions="test", max_turns=10, stream=stream,
     )
 
 
@@ -57,3 +57,10 @@ class TestEvalOptimizeLoop:
     def test_registered(self) -> None:
         from agent_harness.loops import registry
         assert "eval_optimize" in registry
+
+    def test_forwards_stream_flag(self) -> None:
+        responses = [_response("great output"), _response("Excellent. SCORE: 9/10")]
+        chat_fn = MagicMock(side_effect=responses)
+        run(chat_fn, [Message(role="user", content="go")], [], _config(stream=True))
+        for call in chat_fn.call_args_list:
+            assert call.kwargs["stream"] is True

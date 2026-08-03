@@ -36,6 +36,8 @@ class Message:
     content: str | None = None
     tool_calls: list[ToolCall] | None = None
     tool_result: ToolResult | None = None
+    thinking: str | None = None
+    thinking_blocks: list[dict[str, Any]] | None = None
 
 
 @dataclass
@@ -75,12 +77,15 @@ class AgentConfig:
     provider_kwargs: dict[str, Any] = field(default_factory=dict)
     permissions: dict[str, Any] = field(default_factory=dict)
     hooks: dict[str, Any] = field(default_factory=dict)
+    stream: bool = False
+    show_thinking: bool = False
 
 
 # Callback type aliases
 OnResponse = Callable[[Response], None]
 OnToolCall = Callable[[ToolCall], ToolResult | None]
 OnBudget = Callable[[Usage], bool]
+OnDelta = Callable[[str, str], None]
 
 
 @dataclass
@@ -90,3 +95,5 @@ class LoopCallbacks:
     on_response: OnResponse | None = None
     on_tool_call: OnToolCall | None = None
     on_budget: OnBudget | None = None
+    on_delta: OnDelta | None = None
+    on_thinking_delta: OnDelta | None = None

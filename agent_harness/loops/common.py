@@ -47,7 +47,9 @@ def ensure_clean_state(
 
         # Last message is tool result — LLM needs to respond
         if last.role == "tool":
-            response = chat_fn(messages, tool_schemas, model=config.model, **config.provider_kwargs)
+            response = chat_fn(
+                messages, tool_schemas, model=config.model, stream=config.stream, **config.provider_kwargs,
+            )
             messages.append(response.message)
             continue  # Check again — response might have tool_calls
 

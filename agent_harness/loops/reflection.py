@@ -51,7 +51,7 @@ def run(
 
         # Critique — pass tool_schemas so API accepts tool_use in history
         messages.append(Message(role="user", content=_CRITIQUE_PROMPT))
-        critique = chat_fn(messages, tool_schemas, model=config.model, **config.provider_kwargs)
+        critique = chat_fn(messages, tool_schemas, model=config.model, stream=config.stream, **config.provider_kwargs)
         messages.append(critique.message)
         if cb.on_response:
             cb.on_response(critique)

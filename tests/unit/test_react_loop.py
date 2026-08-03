@@ -14,7 +14,7 @@ from agent_harness.types import (
 )
 
 
-def _config(max_turns: int = 10) -> AgentConfig:
+def _config(max_turns: int = 10, stream: bool = False) -> AgentConfig:
     return AgentConfig(
         name="test",
         provider="anthropic",
@@ -22,6 +22,7 @@ def _config(max_turns: int = 10) -> AgentConfig:
         agent_dir="/tmp/test",
         instructions="test",
         max_turns=max_turns,
+        stream=stream,
     )
 
 
@@ -84,6 +85,27 @@ class TestRunMaxTurns:
         cb = LoopCallbacks(on_tool_call=on_tool_call)
         run(chat_fn, messages, [], _config(max_turns=3), callbacks=cb)
         assert chat_fn.call_count == 3
+
+
+class TestRunStreaming:
+    def test_forwards_stream_flag(self) -> None:
+        chat_fn = MagicMock(return_value=_response("hi"))
+        run(chat_fn, [Message(role="user", content="hi")], [], _config(stream=True))
+        assert chat_fn.call_args.kwargs["stream"] is True
+
+    def test_forwards_stream_false_by_default(self) -> None:
+        chat_fn = MagicMock(return_value=_response("hi"))
+        run(chat_fn, [Message(role="user", content="hi")], [], _config())
+        assert chat_fn.call_args.kwargs["stream"] is False
+
+    def test_forwards_delta_callbacks(self) -> None:
+        chat_fn = MagicMock(return_value=_response("hi"))
+        on_delta = MagicMock()
+        on_thinking_delta = MagicMock()
+        cb = LoopCallbacks(on_delta=on_delta, on_thinking_delta=on_thinking_delta)
+        run(chat_fn, [Message(role="user", content="hi")], [], _config(stream=True), callbacks=cb)
+        assert chat_fn.call_args.kwargs["on_delta"] is on_delta
+        assert chat_fn.call_args.kwargs["on_thinking_delta"] is on_thinking_delta
 
 
 class TestRunCallbacks:

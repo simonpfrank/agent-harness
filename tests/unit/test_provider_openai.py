@@ -409,6 +409,25 @@ class TestChat:
         mock_client.responses.create.assert_not_called()
 
     @patch("agent_harness.providers.openai_provider._get_client")
+    def test_stream_on_chat_completions_endpoint_rejected(self, mock_get_client: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+
+        try:
+            chat(
+                [Message(role="user", content="hi")],
+                tools=[],
+                model="qwen3-4b-thinking-2507",
+                base_url="http://localhost:1234/v1",
+                stream=True,
+            )
+            raise AssertionError("Should have raised")
+        except ValueError as exc:
+            assert "stream" in str(exc).lower()
+        mock_client.responses.stream.assert_not_called()
+        mock_client.chat.completions.create.assert_not_called()
+
+    @patch("agent_harness.providers.openai_provider._get_client")
     def test_auth_error_fails_immediately(self, mock_get_client: MagicMock) -> None:
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
@@ -427,3 +446,69 @@ class TestChat:
         except RuntimeError as exc:
             assert "API key" in str(exc) or "authentication" in str(exc).lower()
         assert mock_client.responses.create.call_count == 1
+
+
+class TestChatStreaming:
+    @patch("agent_harness.providers.openai_provider._get_client")
+    def test_streams_text_deltas(self, mock_get_client: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+
+        delta_event1 = MagicMock(type="response.output_text.delta", delta="Hel")
+        delta_event2 = MagicMock(type="response.output_text.delta", delta="lo")
+
+        output_text = MagicMock(type="output_text", text="Hello")
+        output_message = MagicMock(type="message", content=[output_text])
+        final_response = MagicMock()
+        final_response.output = [output_message]
+        final_response.usage.input_tokens = 10
+        final_response.usage.output_tokens = 5
+        final_response.choices = None
+
+        mock_stream = MagicMock()
+        mock_stream.__enter__.return_value = mock_stream
+        mock_stream.__exit__.return_value = False
+        mock_stream.__iter__.return_value = iter([delta_event1, delta_event2])
+        mock_stream.get_final_response.return_value = final_response
+        mock_client.responses.stream.return_value = mock_stream
+
+        received: list[tuple[str, str]] = []
+
+        def on_delta(agent_id: str, chunk: str) -> None:
+            received.append((agent_id, chunk))
+
+        result = chat(
+            [Message(role="user", content="hi")],
+            tools=[],
+            model="gpt-4o-mini",
+            stream=True,
+            on_delta=on_delta,
+        )
+        assert result.message.content == "Hello"
+        assert received == [("default", "Hel"), ("default", "lo")]
+        mock_client.responses.stream.assert_called_once()
+        mock_client.responses.create.assert_not_called()
+
+    @patch("agent_harness.providers.openai_provider._get_client")
+    def test_stream_without_callback_still_returns_response(self, mock_get_client: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+
+        delta_event = MagicMock(type="response.output_text.delta", delta="hi")
+        output_text = MagicMock(type="output_text", text="hi")
+        output_message = MagicMock(type="message", content=[output_text])
+        final_response = MagicMock()
+        final_response.output = [output_message]
+        final_response.usage.input_tokens = 1
+        final_response.usage.output_tokens = 1
+        final_response.choices = None
+
+        mock_stream = MagicMock()
+        mock_stream.__enter__.return_value = mock_stream
+        mock_stream.__exit__.return_value = False
+        mock_stream.__iter__.return_value = iter([delta_event])
+        mock_stream.get_final_response.return_value = final_response
+        mock_client.responses.stream.return_value = mock_stream
+
+        result = chat([Message(role="user", content="hi")], tools=[], model="gpt-4o-mini", stream=True)
+        assert result.message.content == "hi"

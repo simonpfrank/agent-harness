@@ -6,10 +6,10 @@ from agent_harness.loops.debate import run
 from agent_harness.types import AgentConfig, LoopCallbacks, Message, Response, Usage
 
 
-def _config(max_turns: int = 3) -> AgentConfig:
+def _config(max_turns: int = 3, stream: bool = False) -> AgentConfig:
     return AgentConfig(
         name="test", provider="anthropic", model="test",
-        agent_dir="/tmp/test", instructions="test", max_turns=max_turns,
+        agent_dir="/tmp/test", instructions="test", max_turns=max_turns, stream=stream,
     )
 
 
@@ -63,3 +63,10 @@ class TestDebateLoop:
     def test_registered(self) -> None:
         from agent_harness.loops import registry
         assert "debate" in registry
+
+    def test_forwards_stream_flag(self) -> None:
+        responses = [_response("FOR"), _response("AGAINST"), _response("SYNTHESIS")]
+        chat_fn = MagicMock(side_effect=responses)
+        run(chat_fn, [Message(role="user", content="go")], [], _config(max_turns=1, stream=True))
+        for call in chat_fn.call_args_list:
+            assert call.kwargs["stream"] is True
