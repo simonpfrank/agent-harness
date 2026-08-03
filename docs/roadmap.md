@@ -101,9 +101,57 @@ firms up, not acted on yet.
   and rough timeline it didn't have before.
 - **Reachy Mini personal assistant (home, conditional on buying the robot)**
   — a body-doubling / personal-organisation assistant, connected to a
-  physical robot (camera, voice, expressive movement). Most speculative and
-  furthest out of the four. Different application shape than the other
-  three — embodied, voice-first, personal rather than coding-task-oriented.
+  physical robot (camera, voice, expressive movement). The point isn't just
+  functional organisation — it's making organisation *fun*, using the
+  robot's physical presence/expressiveness as the engagement hook rather
+  than another neutral reminder system. Most speculative and furthest out
+  of the four. Different application shape than the other three — embodied,
+  voice-first, personal rather than coding-task-oriented.
+
+### What a decent coding agent would need (added 2026-08-03)
+
+Curiosity-driven, not a commitment — came out of thinking about the ATF
+work. Verified against the actual code, not guessed. Conclusion: closer
+than expected — it's not "difficult," it comes down to four things: tools,
+a todo list, planning, and completion detection.
+
+**Already there, no work needed:** file I/O + execution (`read_file`,
+`write_file`, `run_command`, `execute_code`), cost/turn budgeting (`Budget`),
+permission gates + safety hooks, streaming + extended thinking (both shipped
+this session), sub-agent delegation (`routing.py`, `orchestrator` example
+agent) — directly relevant to "coding agent that builds workflows."
+
+**Tools — two real gaps:**
+- No targeted edit tool. `write_file` (`tools.py:137`) only does whole-file
+  overwrite — no search-replace/diff-based edit. This is the single biggest
+  gap: token cost and error rate both scale badly with whole-file rewrites
+  once files aren't tiny.
+- No content search. `file_search` (`tools/file_search.py`) only does
+  filename/glob matching — checked directly, there's no "find where X is
+  used across the codebase" (grep-equivalent) tool at all.
+- Plus existing `MCP support` idea (above) — now has a concrete reason:
+  using the ATF's existing MCP tooling from a coding agent needs this.
+
+**Todo list — doesn't exist, flagged as needed.** Nothing in the harness
+gives an agent (or the human watching) an explicit, visible, checkable task
+list during a long task — the closest thing today is `ralph.py`'s
+fresh-context retry, which has no notion of sub-tasks at all.
+
+**Planning — partially exists.** `loops/plan_execute.py` already does
+plan-once-then-execute-each-step. What it doesn't do: adaptive re-planning
+when a step reveals something the original plan didn't account for — it's a
+static plan, not a living one.
+
+**Completion detection — real weakness, checked directly.** `ralph.py`'s
+"done" signal is the model saying the literal word `DONE` in its response
+(`_DONE_MARKER`) — a self-report, not a verification. The loop never runs
+the test suite itself and checks the result; it just believes the model.
+Same category of problem as the JSON-fencing discussion — the loop has no
+way to programmatically check its own work.
+
+**Connects to RAG work already planned:** semantic search over a codebase
+(not just docs) is the same infrastructure as `docs/rag-plan.md`, different
+corpus — worth keeping in mind if either gets built.
 
 ### prompt caching
 
