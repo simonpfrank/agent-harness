@@ -2,23 +2,8 @@
 
 from __future__ import annotations
 
+from agent_harness.models import MODEL_REGISTRY
 from agent_harness.types import AgentConfig, Usage
-
-# Cost per million tokens: (input, output)
-COST_TABLE: dict[tuple[str, str], tuple[float, float]] = {
-    ("anthropic", "claude-haiku-4-5-20251001"): (0.80, 4.00),
-    ("anthropic", "claude-sonnet-4-6"): (3.00, 15.00),
-    ("anthropic", "claude-opus-4-6"): (15.00, 75.00),
-    ("openai", "gpt-4o-mini"): (0.15, 0.60),
-    ("openai", "gpt-4o"): (2.50, 10.00),
-    ("openai", "gpt-5.4"): (2.50, 15.00),
-    ("openai", "gpt-5.4-mini"): (0.75, 4.50),
-    ("openai", "gpt-5.4-nano"): (0.20, 1.25),
-    ("openai", "gpt-5.1"): (1.25, 10.00),
-    ("openai", "gpt-5-mini"): (0.25, 2.00),
-    ("openai", "gpt-5-nano"): (0.05, 0.40),
-    ("openai", "o4-mini"): (1.10, 4.40),
-}
 
 
 class Budget:
@@ -46,9 +31,11 @@ class Budget:
             True if any budget limit has been exceeded.
         """
         self._turns += 1
-        rates = COST_TABLE.get((self._provider, self._model), (0.0, 0.0))
-        input_cost = (usage.input_tokens / 1_000_000) * rates[0]
-        output_cost = (usage.output_tokens / 1_000_000) * rates[1]
+        spec = MODEL_REGISTRY.get((self._provider, self._model))
+        input_rate = spec.input_cost_per_million if spec else 0.0
+        output_rate = spec.output_cost_per_million if spec else 0.0
+        input_cost = (usage.input_tokens / 1_000_000) * input_rate
+        output_cost = (usage.output_tokens / 1_000_000) * output_rate
         self._total_cost += input_cost + output_cost
 
         if self._turns >= self._max_turns:
@@ -64,6 +51,20 @@ class Budget:
     def total_cost(self) -> float:
         """Estimated USD cost accumulated so far."""
         return self._total_cost
+
+    def status_note(self) -> str:
+        """Human-readable remaining-budget note for injection into a turn.
+
+        Returns:
+            A note stating turns remaining, and estimated cost remaining
+            if `max_cost` is configured.
+        """
+        remaining_turns = max(self._max_turns - self._turns, 0)
+        note = f"You have {remaining_turns} turn(s) remaining."
+        if self._max_cost is not None:
+            remaining_cost = max(self._max_cost - self._total_cost, 0.0)
+            note += f" Estimated ${remaining_cost:.4f} remaining."
+        return note
 
     def summary(self) -> str:
         """Human-readable budget status.

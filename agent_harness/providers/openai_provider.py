@@ -13,22 +13,12 @@ from typing import Any, cast
 
 import openai
 
+from agent_harness.models import MODEL_REGISTRY
 from agent_harness.providers.retry import with_retry
 from agent_harness.types import Message, Response, ToolCall, Usage
 
 _clients: dict[str, openai.OpenAI] = {}
-_SUPPORTED_RESPONSE_MODELS = {
-    "gpt-4o",
-    "gpt-4o-mini",
-    "gpt-5.4",
-    "gpt-5.4-mini",
-    "gpt-5.4-nano",
-    "gpt-5.1",
-    "gpt-5-mini",
-    "gpt-5-nano",
-}
 _EXCLUDED_MODEL_PREFIXES = ("o1", "o3", "o4")
-_OLDER_GPT5_DEFAULT_MINIMAL_REASONING = {"gpt-5", "gpt-5-mini", "gpt-5-nano"}
 
 
 def _coerce_usage_int(value: Any, fallback: int = 0) -> int:
@@ -38,7 +28,9 @@ def _coerce_usage_int(value: Any, fallback: int = 0) -> int:
     return fallback
 
 
-def _get_client(base_url: str | None = None, api_key: str | None = None) -> openai.OpenAI:
+def _get_client(
+    base_url: str | None = None, api_key: str | None = None
+) -> openai.OpenAI:
     """Get or create an OpenAI client, keyed by base URL.
 
     Args:
@@ -73,19 +65,16 @@ def _response_endpoint_for_model(model: str, base_url: str | None = None) -> str
         Either `"responses"` or `"chat_completions"`.
 
     Raises:
-        ValueError: If the hosted OpenAI model is intentionally unsupported.
+        ValueError: If the model is an o-series reasoning model, which this
+            provider deliberately excludes.
     """
     if base_url:
         return "chat_completions"
-    if model in _SUPPORTED_RESPONSE_MODELS:
-        return "responses"
     if model.startswith(_EXCLUDED_MODEL_PREFIXES):
         raise ValueError(
-            f"Unsupported OpenAI model '{model}'. This provider excludes o-series reasoning models.",
+            f"Unsupported OpenAI model '{model}': o-series reasoning models are not supported.",
         )
-    raise ValueError(
-        f"Unsupported OpenAI model '{model}'. Add it to the compatibility matrix before using it.",
-    )
+    return "responses"
 
 
 def _to_openai_messages(messages: list[Message]) -> list[dict[str, Any]]:
@@ -135,7 +124,9 @@ def _to_openai_messages(messages: list[Message]) -> list[dict[str, Any]]:
     return result
 
 
-def _to_openai_input(messages: list[Message]) -> tuple[str | None, list[dict[str, Any]]]:
+def _to_openai_input(
+    messages: list[Message],
+) -> tuple[str | None, list[dict[str, Any]]]:
     """Convert internal messages to Responses API instructions and input items.
 
     Args:
@@ -286,7 +277,9 @@ def _responses_to_response(api_response: Any) -> Response:
         tool_calls=tool_calls or None,
     )
     stop_reason = "tool_use" if tool_calls else "end_turn"
-    return Response(message=message, usage=_usage_to_internal(api_response), stop_reason=stop_reason)
+    return Response(
+        message=message, usage=_usage_to_internal(api_response), stop_reason=stop_reason
+    )
 
 
 def _chat_completions_to_response(api_response: Any) -> Response:
@@ -316,7 +309,9 @@ def _chat_completions_to_response(api_response: Any) -> Response:
         tool_calls=tool_calls or None,
     )
     stop_reason = "tool_use" if tool_calls else "end_turn"
-    return Response(message=message, usage=_usage_to_internal(api_response), stop_reason=stop_reason)
+    return Response(
+        message=message, usage=_usage_to_internal(api_response), stop_reason=stop_reason
+    )
 
 
 def _to_response(api_response: Any) -> Response:
@@ -364,8 +359,13 @@ def _build_create_kwargs(
     endpoint = _response_endpoint_for_model(model, base_url=base_url)
     if endpoint == "chat_completions":
         if messages is None:
-            raise ValueError("Chat Completions fallback requires the original message list.")
-        create_kwargs: dict[str, Any] = {"model": model, "messages": _to_openai_messages(messages)}
+            raise ValueError(
+                "Chat Completions fallback requires the original message list."
+            )
+        create_kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": _to_openai_messages(messages),
+        }
         if temperature is not None:
             create_kwargs["temperature"] = temperature
         if max_tokens is not None:
@@ -386,9 +386,10 @@ def _build_create_kwargs(
         create_kwargs["top_p"] = top_p
     if max_tokens is not None:
         create_kwargs["max_output_tokens"] = max_tokens
+    spec = MODEL_REGISTRY.get(("openai", model))
     if reasoning_effort is not None:
         create_kwargs["reasoning"] = {"effort": reasoning_effort}
-    elif model in _OLDER_GPT5_DEFAULT_MINIMAL_REASONING:
+    elif spec is not None and spec.minimal_reasoning_default:
         create_kwargs["reasoning"] = {"effort": "minimal"}
     api_tools = _to_responses_tools(tools)
     if api_tools:
@@ -412,7 +413,12 @@ def _stream_responses_deltas(stream: Any, on_delta: Any) -> Response:
     return _to_response(stream.get_final_response())
 
 
-def chat(messages: list[Message], tools: list[dict[str, Any]], model: str = "gpt-4o-mini", **kwargs: Any) -> Response:
+def chat(
+    messages: list[Message],
+    tools: list[dict[str, Any]],
+    model: str = "gpt-4o-mini",
+    **kwargs: Any,
+) -> Response:
     """Send messages to OpenAI and return a harness response.
 
     Args:
@@ -450,7 +456,9 @@ def chat(messages: list[Message], tools: list[dict[str, Any]], model: str = "gpt
 
     stream = kwargs.get("stream", False)
     if stream and endpoint == "chat_completions":
-        raise ValueError("stream is not supported for Chat Completions (custom base_url) backends")
+        raise ValueError(
+            "stream is not supported for Chat Completions (custom base_url) backends"
+        )
     on_delta = kwargs.get("on_delta")
 
     def _call() -> Response:
@@ -464,11 +472,11 @@ def chat(messages: list[Message], tools: list[dict[str, Any]], model: str = "gpt
     return cast(
         Response,
         with_retry(
-        _call,
-        auth_error=openai.AuthenticationError,
-        bad_request_error=openai.BadRequestError,
-        api_error=openai.APIError,
-        provider_name="OpenAI",
-        env_var="OPENAI_API_KEY",
+            _call,
+            auth_error=openai.AuthenticationError,
+            bad_request_error=openai.BadRequestError,
+            api_error=openai.APIError,
+            provider_name="OpenAI",
+            env_var="OPENAI_API_KEY",
         ),
     )

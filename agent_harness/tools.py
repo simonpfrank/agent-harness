@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import inspect
 import logging
+import os
 import shlex
 import subprocess
 import sys
@@ -13,12 +14,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, get_type_hints
 
+import anthropic
+import httpx
+import openai
+import trafilatura
+
 from agent_harness.memory import list_memories as list_memories_for_dir
 from agent_harness.memory import recall_memory as recall_memory_for_dir
 from agent_harness.memory import save_memory as save_memory_for_dir
+from agent_harness.providers import registry as provider_registry
 from agent_harness.types import ToolCall, ToolResult
 
 _logger = logging.getLogger(__name__)
+_TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 
 _TYPE_MAP: dict[type[Any], str] = {
     str: "string",
@@ -148,6 +156,111 @@ def write_file(path: str, content: str) -> str:
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content)
     return f"Written {len(content)} chars to {path}"
+
+
+def edit_file(path: str, old_string: str, new_string: str) -> str:
+    """Replace an exact, unique substring in a file.
+
+    Args:
+        path: Path to the file to edit
+        old_string: Exact text to find — must appear exactly once
+        new_string: Text to replace it with
+
+    Returns:
+        Confirmation naming the edited file.
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
+        ValueError: If old_string is not found, or found more than once.
+    """
+    target = Path(path)
+    content = target.read_text()
+    count = content.count(old_string)
+    if count == 0:
+        raise ValueError(f"old_string not found in {path}")
+    if count > 1:
+        raise ValueError(f"old_string not unique in {path} — matched {count} times")
+    target.write_text(content.replace(old_string, new_string))
+    return f"Edited {path}"
+
+
+def web_fetch(url: str) -> str:
+    """Fetch a URL and extract its main readable content.
+
+    Uses trafilatura to discard navigation/ads/boilerplate and return the
+    main content as markdown. Falls back to the raw page text if
+    trafilatura can't identify substantial content (e.g. very short or
+    table-only pages).
+
+    Args:
+        url: URL to fetch.
+
+    Returns:
+        Extracted content as markdown, or raw page text as a fallback.
+
+    Raises:
+        httpx.HTTPStatusError: If the request returns a non-2xx status.
+    """
+    response = httpx.get(url, timeout=30, follow_redirects=True)
+    response.raise_for_status()
+    extracted = trafilatura.extract(response.text, output_format="markdown")
+    return extracted if extracted is not None else response.text
+
+
+def web_search(query: str) -> str:
+    """Search the web via Tavily and return formatted results.
+
+    Args:
+        query: Search query.
+
+    Returns:
+        Formatted title/url/snippet per result, or a no-results message.
+
+    Raises:
+        RuntimeError: If TAVILY_API_KEY is not set.
+        httpx.HTTPStatusError: If the request returns a non-2xx status.
+    """
+    api_key = os.environ.get("TAVILY_API_KEY")
+    if not api_key:
+        raise RuntimeError("TAVILY_API_KEY not set — export it to use web_search")
+    response = httpx.post(
+        _TAVILY_SEARCH_URL,
+        headers={"Authorization": f"Bearer {api_key}"},
+        json={"query": query, "max_results": 5},
+        timeout=30,
+    )
+    response.raise_for_status()
+    results = response.json().get("results", [])
+    if not results:
+        return "No results found."
+    return "\n\n".join(f"{r['title']}\n{r['url']}\n{r['content']}" for r in results)
+
+
+def list_provider_models(provider: str) -> str:
+    """List all models currently published by a provider's live API.
+
+    Unlike the harness's internal compatibility/pricing tables, this queries
+    the vendor directly, so it can surface models the harness doesn't know
+    about yet.
+
+    Args:
+        provider: Provider name. Must be a harness-registered provider.
+
+    Returns:
+        Newline-separated model IDs as currently published by the provider,
+        or a no-models message.
+
+    Raises:
+        ValueError: If provider is not a harness-registered provider.
+    """
+    if provider not in provider_registry:
+        raise ValueError(f"Unknown provider: {provider}")
+    model_ids: list[str] = []
+    if provider == "anthropic":
+        model_ids = sorted(model.id for model in anthropic.Anthropic().models.list())
+    elif provider == "openai":
+        model_ids = sorted(model.id for model in openai.OpenAI().models.list())
+    return "\n".join(model_ids) if model_ids else "No models found."
 
 
 def list_directory(path: str = ".") -> str:
@@ -283,6 +396,10 @@ def build_tool_registry(context: ToolRuntimeContext | None = None) -> dict[str, 
         "run_command": run_command_tool,
         "read_file": read_file,
         "write_file": write_file,
+        "edit_file": edit_file,
+        "web_fetch": web_fetch,
+        "web_search": web_search,
+        "list_provider_models": list_provider_models,
         "list_directory": list_directory,
         "execute_code": execute_code_tool,
         "save_memory": save_memory_tool,

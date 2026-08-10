@@ -17,7 +17,15 @@ from agent_harness.loops import registry as loop_registry
 from agent_harness.providers import registry as provider_registry
 from agent_harness.session import load_session, save_session
 from agent_harness.skills import load_skills
-from agent_harness.tools import discover_tools, execute_tool, generate_schema
+from agent_harness.tools import (
+    discover_tools,
+    edit_file,
+    execute_tool,
+    generate_schema,
+    list_provider_models,
+    web_fetch,
+    web_search,
+)
 from agent_harness.tools import registry as tool_registry
 from agent_harness.types import LoopCallbacks, Message, ToolCall, Usage
 
@@ -26,6 +34,16 @@ load_dotenv()
 requires_api_key = pytest.mark.skipif(
     not os.environ.get("ANTHROPIC_API_KEY"),
     reason="ANTHROPIC_API_KEY not set",
+)
+
+requires_openai_key = pytest.mark.skipif(
+    not os.environ.get("OPENAI_API_KEY"),
+    reason="OPENAI_API_KEY not set",
+)
+
+requires_tavily_key = pytest.mark.skipif(
+    not os.environ.get("TAVILY_API_KEY"),
+    reason="TAVILY_API_KEY not set",
 )
 
 
@@ -166,3 +184,76 @@ class TestSecurityEndToEnd:
             scanned = hooks.run_after_tool(checked, result)
             assert "[EXTERNAL CONTENT WARNING]" in (scanned.output or "")
         Path(f.name).unlink()
+
+
+class TestEditFileReal:
+    def test_edits_a_real_file(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            path = str(Path(d) / "budget.py")
+            Path(path).write_text('COST_TABLE = {"old": (1.0, 2.0)}\n')
+            edit_file(path, '"old": (1.0, 2.0)', '"new": (3.0, 4.0)')
+            assert Path(path).read_text() == 'COST_TABLE = {"new": (3.0, 4.0)}\n'
+
+
+class TestWebFetchReal:
+    def test_fetches_and_extracts_local_page(self) -> None:
+        """Real HTTP request + real trafilatura extraction against a local
+        server — avoids depending on an external site's structure staying
+        stable across test runs."""
+        import http.server
+        import socketserver
+        import threading
+
+        html = (
+            "<html><body><nav>Home | About | Contact</nav>"
+            "<article><h1>Test Page</h1><p>This is the real article content "
+            "that should survive extraction.</p></article>"
+            "<footer>Copyright 2026</footer></body></html>"
+        )
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self) -> None:  # noqa: N802
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.end_headers()
+                self.wfile.write(html.encode())
+
+            def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+                pass
+
+        with socketserver.TCPServer(("127.0.0.1", 0), Handler) as httpd:
+            port = httpd.server_address[1]
+            thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+            thread.start()
+            try:
+                result = web_fetch(f"http://127.0.0.1:{port}/")
+                assert "real article content" in result
+            finally:
+                httpd.shutdown()
+                thread.join(timeout=5)
+
+
+@requires_tavily_key
+class TestWebSearchReal:
+    def test_real_search(self) -> None:
+        result = web_search("Anthropic Claude API pricing")
+        assert result != "No results found."
+        assert len(result) > 0
+
+
+class TestListProviderModelsReal:
+    @requires_api_key
+    def test_real_anthropic_model_list(self) -> None:
+        result = list_provider_models("anthropic")
+        assert result != "No models found."
+        assert "claude" in result
+
+    @requires_openai_key
+    def test_real_openai_model_list(self) -> None:
+        result = list_provider_models("openai")
+        assert result != "No models found."
+        assert "gpt" in result
+
+    def test_unknown_provider_raises(self) -> None:
+        with pytest.raises(ValueError, match="Unknown provider"):
+            list_provider_models("fakellm")

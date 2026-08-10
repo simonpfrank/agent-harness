@@ -30,7 +30,16 @@ from agent_harness.tools import (
     generate_schema,
 )
 from agent_harness.trace import Tracer
-from agent_harness.types import AgentConfig, LoopCallbacks, Message, Response, ToolCall, ToolResult, Usage
+from agent_harness.types import (
+    AgentConfig,
+    LoopCallbacks,
+    Message,
+    OnPlanApproval,
+    Response,
+    ToolCall,
+    ToolResult,
+    Usage,
+)
 
 PermissionPromptFn = Callable[[ToolCall], PermissionDecision | bool]
 DomainPromptFn = Callable[[str], bool]
@@ -211,6 +220,7 @@ def _make_callbacks(
     show_output: bool,
     stream: bool = False,
     show_thinking: bool = False,
+    plan_prompt_fn: OnPlanApproval | None = None,
 ) -> LoopCallbacks:
     def on_delta(_agent_id: str, text: str) -> None:
         if show_output:
@@ -258,14 +268,27 @@ def _make_callbacks(
     def on_budget(usage: Usage) -> bool:
         exceeded = budget.record(usage)
         if show_output:
-            show_budget(budget.summary())
-        tracer.record("budget", summary=budget.summary())
+            summary = budget.summary()
+            if exceeded:
+                summary += " — stopping (budget limit reached, task may be incomplete)"
+            show_budget(summary)
+        tracer.record("budget", summary=budget.summary(), exceeded=exceeded)
         return exceeded
+
+    on_plan_approval: OnPlanApproval | None = None
+    if plan_prompt_fn is not None:
+        def _on_plan_approval(steps: list[str]) -> bool:
+            approved = plan_prompt_fn(steps)
+            tracer.record("plan_approval", steps=steps, approved=approved)
+            return approved
+        on_plan_approval = _on_plan_approval
 
     return LoopCallbacks(
         on_response=on_response,
         on_tool_call=on_tool_call,
         on_budget=on_budget,
+        get_budget_status=budget.status_note,
+        on_plan_approval=on_plan_approval,
         on_delta=on_delta,
         on_thinking_delta=on_thinking_delta,
     )
@@ -276,6 +299,7 @@ def prepare_runtime(
     *,
     permission_prompt_fn: PermissionPromptFn,
     domain_prompt_fn: DomainPromptFn | None = None,
+    plan_prompt_fn: OnPlanApproval | None = None,
     show_output: bool = True,
     trace_enabled: bool = True,
 ) -> PreparedRuntime:
@@ -285,6 +309,8 @@ def prepare_runtime(
         config: Loaded agent configuration.
         permission_prompt_fn: Callback used when a tool call needs approval.
         domain_prompt_fn: Optional callback used by the network blocker to approve domains.
+        plan_prompt_fn: Optional callback used by `plan_execute` to approve a
+            generated plan before it executes. Inert if omitted.
         show_output: Whether response/tool panels should be rendered to the console.
         trace_enabled: Whether structured trace files should be written.
 
@@ -331,6 +357,7 @@ def prepare_runtime(
         show_output,
         stream=config.stream,
         show_thinking=config.show_thinking,
+        plan_prompt_fn=plan_prompt_fn,
     )
     chat_fn = provider_registry[config.provider]
     loop_fn = loop_registry[config.loop]

@@ -73,7 +73,9 @@ class TestToOpenaiInput:
         assert input_items == [{"role": "user", "content": "hello"}]
 
     def test_converts_assistant_tool_calls_and_tool_output(self) -> None:
-        tool_call = ToolCall(id="call_1", name="read_file", arguments={"path": "foo.txt"})
+        tool_call = ToolCall(
+            id="call_1", name="read_file", arguments={"path": "foo.txt"}
+        )
         tool_result = ToolResult(tool_call_id="call_1", output="contents")
         messages = [
             Message(role="assistant", content="Checking", tool_calls=[tool_call]),
@@ -109,7 +111,10 @@ class TestToOpenaiTools:
         assert len(result) == 1
         assert result[0]["type"] == "function"
         assert result[0]["function"]["name"] == "read_file"
-        assert result[0]["function"]["parameters"]["properties"]["path"]["type"] == "string"
+        assert (
+            result[0]["function"]["parameters"]["properties"]["path"]["type"]
+            == "string"
+        )
 
 
 class TestToResponse:
@@ -222,14 +227,16 @@ class TestToResponse:
 
 
 class TestEndpointRouting:
-    def test_gpt_5_models_use_responses_api(self) -> None:
-        assert _response_endpoint_for_model("gpt-5.4") == "responses"
+    def test_any_non_o_series_model_uses_responses_api(self) -> None:
+        """No allowlist — any model name routes to Responses by default."""
+        assert _response_endpoint_for_model("gpt-4o") == "responses"
+        assert _response_endpoint_for_model("gpt-5.6-luna") == "responses"
         assert _response_endpoint_for_model("gpt-5-mini") == "responses"
         assert _response_endpoint_for_model("gpt-5-nano") == "responses"
+        assert _response_endpoint_for_model("some-brand-new-future-model") == "responses"
 
-    def test_gpt_4o_models_use_responses_api(self) -> None:
-        assert _response_endpoint_for_model("gpt-4o") == "responses"
-        assert _response_endpoint_for_model("gpt-4o-mini") == "responses"
+    def test_base_url_forces_chat_completions(self) -> None:
+        assert _response_endpoint_for_model("gpt-4o", base_url="http://localhost:1234/v1") == "chat_completions"
 
     def test_excluded_o_series_model_is_rejected(self) -> None:
         try:
@@ -241,9 +248,11 @@ class TestEndpointRouting:
 
 class TestCreateKwargs:
     def test_builds_responses_kwargs_for_gpt_5_model(self) -> None:
-        instructions, input_items = _to_openai_input([Message(role="user", content="hi")])
+        instructions, input_items = _to_openai_input(
+            [Message(role="user", content="hi")]
+        )
         kwargs = _build_create_kwargs(
-            model="gpt-5.4-mini",
+            model="gpt-5.6-luna",
             instructions=instructions,
             input_items=input_items,
             tools=[],
@@ -252,14 +261,16 @@ class TestCreateKwargs:
             top_p=None,
         )
 
-        assert kwargs["model"] == "gpt-5.4-mini"
+        assert kwargs["model"] == "gpt-5.6-luna"
         assert kwargs["input"] == [{"role": "user", "content": "hi"}]
         assert kwargs["max_output_tokens"] == 123
         assert "messages" not in kwargs
         assert "reasoning" not in kwargs
 
     def test_older_gpt_5_nano_defaults_to_minimal_reasoning(self) -> None:
-        instructions, input_items = _to_openai_input([Message(role="user", content="hi")])
+        instructions, input_items = _to_openai_input(
+            [Message(role="user", content="hi")]
+        )
         kwargs = _build_create_kwargs(
             model="gpt-5-nano",
             instructions=instructions,
@@ -273,9 +284,11 @@ class TestCreateKwargs:
         assert kwargs["reasoning"] == {"effort": "minimal"}
 
     def test_builds_responses_kwargs_for_gpt_4o_model(self) -> None:
-        instructions, input_items = _to_openai_input([Message(role="user", content="hi")])
+        instructions, input_items = _to_openai_input(
+            [Message(role="user", content="hi")]
+        )
         kwargs = _build_create_kwargs(
-            model="gpt-4o-mini",
+            model="gpt-5-mini",
             instructions=instructions,
             input_items=input_items,
             tools=[],
@@ -312,13 +325,15 @@ class TestChat:
             Message(role="system", content="be helpful"),
             Message(role="user", content="hello"),
         ]
-        result = chat(msgs, tools=[], model="gpt-4o-mini")
+        result = chat(msgs, tools=[], model="gpt-5-mini")
         assert result.message.content == "hi"
         mock_client.responses.create.assert_called_once()
 
     @patch("agent_harness.providers.openai_provider._get_client")
     @patch("agent_harness.providers.retry.time.sleep")
-    def test_retries_on_rate_limit(self, mock_sleep: MagicMock, mock_get_client: MagicMock) -> None:
+    def test_retries_on_rate_limit(
+        self, mock_sleep: MagicMock, mock_get_client: MagicMock
+    ) -> None:
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
 
@@ -326,7 +341,9 @@ class TestChat:
         error_response.status_code = 429
         error_response.headers = {}
         rate_error = openai.RateLimitError(
-            message="rate limited", response=error_response, body=None,
+            message="rate limited",
+            response=error_response,
+            body=None,
         )
         choice = MagicMock()
         choice.message.role = "assistant"
@@ -344,7 +361,9 @@ class TestChat:
         assert mock_client.responses.create.call_count == 2
 
     @patch("agent_harness.providers.openai_provider._get_client")
-    def test_passes_temperature_and_max_tokens(self, mock_get_client: MagicMock) -> None:
+    def test_passes_temperature_and_max_tokens(
+        self, mock_get_client: MagicMock
+    ) -> None:
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
         choice = MagicMock()
@@ -359,7 +378,7 @@ class TestChat:
         chat(
             [Message(role="user", content="hi")],
             tools=[],
-            model="gpt-4o-mini",
+            model="gpt-5-mini",
             temperature=0.0,
             max_tokens=1234,
             top_p=0.5,
@@ -371,7 +390,8 @@ class TestChat:
 
     @patch("agent_harness.providers.openai_provider._get_client")
     def test_excluded_model_fails_clearly(
-        self, mock_get_client: MagicMock,
+        self,
+        mock_get_client: MagicMock,
     ) -> None:
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
@@ -385,7 +405,9 @@ class TestChat:
         mock_client.chat.completions.create.assert_not_called()
 
     @patch("agent_harness.providers.openai_provider._get_client")
-    def test_custom_base_url_uses_chat_completions(self, mock_get_client: MagicMock) -> None:
+    def test_custom_base_url_uses_chat_completions(
+        self, mock_get_client: MagicMock
+    ) -> None:
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
         choice = MagicMock()
@@ -409,7 +431,9 @@ class TestChat:
         mock_client.responses.create.assert_not_called()
 
     @patch("agent_harness.providers.openai_provider._get_client")
-    def test_stream_on_chat_completions_endpoint_rejected(self, mock_get_client: MagicMock) -> None:
+    def test_stream_on_chat_completions_endpoint_rejected(
+        self, mock_get_client: MagicMock
+    ) -> None:
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
 
@@ -436,7 +460,9 @@ class TestChat:
         error_response.status_code = 401
         error_response.headers = {}
         auth_error = openai.AuthenticationError(
-            message="bad key", response=error_response, body=None,
+            message="bad key",
+            response=error_response,
+            body=None,
         )
         mock_client.responses.create.side_effect = auth_error
 
@@ -480,7 +506,7 @@ class TestChatStreaming:
         result = chat(
             [Message(role="user", content="hi")],
             tools=[],
-            model="gpt-4o-mini",
+            model="gpt-5-mini",
             stream=True,
             on_delta=on_delta,
         )
@@ -490,7 +516,9 @@ class TestChatStreaming:
         mock_client.responses.create.assert_not_called()
 
     @patch("agent_harness.providers.openai_provider._get_client")
-    def test_stream_without_callback_still_returns_response(self, mock_get_client: MagicMock) -> None:
+    def test_stream_without_callback_still_returns_response(
+        self, mock_get_client: MagicMock
+    ) -> None:
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
 
@@ -510,5 +538,10 @@ class TestChatStreaming:
         mock_stream.get_final_response.return_value = final_response
         mock_client.responses.stream.return_value = mock_stream
 
-        result = chat([Message(role="user", content="hi")], tools=[], model="gpt-4o-mini", stream=True)
+        result = chat(
+            [Message(role="user", content="hi")],
+            tools=[],
+            model="gpt-5-mini",
+            stream=True,
+        )
         assert result.message.content == "hi"

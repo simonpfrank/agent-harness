@@ -4,23 +4,10 @@ from __future__ import annotations
 
 import logging
 
+from agent_harness.models import MODEL_REGISTRY
 from agent_harness.types import Message
 
 logger = logging.getLogger(__name__)
-
-_CONTEXT_LIMITS: dict[tuple[str, str], int] = {
-    ("anthropic", "claude-haiku-4-5-20251001"): 200_000,
-    ("anthropic", "claude-sonnet-4-6"): 200_000,
-    ("anthropic", "claude-opus-4-6"): 200_000,
-    ("openai", "gpt-4o-mini"): 128_000,
-    ("openai", "gpt-4o"): 128_000,
-    ("openai", "gpt-5.4"): 1_000_000,
-    ("openai", "gpt-5.4-mini"): 400_000,
-    ("openai", "gpt-5.4-nano"): 400_000,
-    ("openai", "gpt-5.1"): 400_000,
-    ("openai", "gpt-5-mini"): 400_000,
-    ("openai", "gpt-5-nano"): 400_000,
-}
 
 _DEFAULT_LIMIT = 128_000
 _THRESHOLD = 0.8
@@ -48,7 +35,8 @@ def get_context_limit(provider: str, model: str) -> int:
     Returns:
         Max tokens for the model's context window.
     """
-    return _CONTEXT_LIMITS.get((provider, model), _DEFAULT_LIMIT)
+    spec = MODEL_REGISTRY.get((provider, model))
+    return spec.context_limit if spec else _DEFAULT_LIMIT
 
 
 def _message_tokens(msg: Message) -> int:

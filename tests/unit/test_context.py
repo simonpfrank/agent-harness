@@ -24,7 +24,7 @@ class TestGetContextLimit:
         assert limit > 0
 
     def test_supported_openai_model_has_explicit_limit(self) -> None:
-        assert get_context_limit("openai", "gpt-5.4-mini") == 400_000
+        assert get_context_limit("openai", "gpt-5.6-luna") == 400_000
 
     def test_unknown_model_returns_default(self) -> None:
         limit = get_context_limit("unknown", "unknown-model")

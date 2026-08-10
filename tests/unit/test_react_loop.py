@@ -87,6 +87,62 @@ class TestRunMaxTurns:
         assert chat_fn.call_count == 3
 
 
+class TestBudgetStatusInjection:
+    def test_injects_note_into_call_messages_only(self) -> None:
+        chat_fn = MagicMock(return_value=_response("hi"))
+        get_budget_status = MagicMock(return_value="You have 3 turn(s) remaining.")
+        cb = LoopCallbacks(get_budget_status=get_budget_status)
+        messages = [
+            Message(role="system", content="You are a helpful assistant."),
+            Message(role="user", content="hi"),
+        ]
+        original_rest = list(messages[1:])
+        run(chat_fn, messages, [], _config(), callbacks=cb)
+
+        call_messages = chat_fn.call_args[0][0]
+        assert call_messages[0].role == "system"
+        assert call_messages[0].content == (
+            "You are a helpful assistant.\n\nYou have 3 turn(s) remaining."
+        )
+        assert call_messages[1:] == original_rest
+
+    def test_canonical_messages_never_mutated(self) -> None:
+        """Regression test: the stored system message must never carry the
+        note, or a resumed session would replay a stale budget line forever."""
+        chat_fn = MagicMock(return_value=_response("hi"))
+        get_budget_status = MagicMock(return_value="You have 3 turn(s) remaining.")
+        cb = LoopCallbacks(get_budget_status=get_budget_status)
+        messages = [
+            Message(role="system", content="You are a helpful assistant."),
+            Message(role="user", content="hi"),
+        ]
+        run(chat_fn, messages, [], _config(), callbacks=cb)
+
+        assert messages[0].content == "You are a helpful assistant."
+
+    def test_no_injection_when_callback_absent(self) -> None:
+        chat_fn = MagicMock(return_value=_response("hi"))
+        messages = [
+            Message(role="system", content="You are a helpful assistant."),
+            Message(role="user", content="hi"),
+        ]
+        run(chat_fn, messages, [], _config())
+
+        call_messages = chat_fn.call_args[0][0]
+        assert call_messages is messages
+        assert call_messages[0].content == "You are a helpful assistant."
+
+    def test_no_injection_when_no_system_message(self) -> None:
+        chat_fn = MagicMock(return_value=_response("hi"))
+        get_budget_status = MagicMock(return_value="You have 3 turn(s) remaining.")
+        cb = LoopCallbacks(get_budget_status=get_budget_status)
+        messages = [Message(role="user", content="hi")]
+        run(chat_fn, messages, [], _config(), callbacks=cb)
+
+        call_messages = chat_fn.call_args[0][0]
+        assert call_messages is messages
+
+
 class TestRunStreaming:
     def test_forwards_stream_flag(self) -> None:
         chat_fn = MagicMock(return_value=_response("hi"))
@@ -126,9 +182,27 @@ class TestRunCallbacks:
             return_value=ToolResult(tool_call_id="tc_1", output="ok")
         )
         on_budget = MagicMock(return_value=True)
+        messages = [Message(role="user", content="go")]
         cb = LoopCallbacks(on_tool_call=on_tool_call, on_budget=on_budget)
-        run(
-            chat_fn, [Message(role="user", content="go")], [],
-            _config(), callbacks=cb,
-        )
+        run(chat_fn, messages, [], _config(), callbacks=cb)
         assert chat_fn.call_count == 1
+
+    def test_on_budget_still_resolves_pending_tool_call(self) -> None:
+        """A tool_use response must always get its tool_result, even when budget
+        is exceeded on the same turn — otherwise the next API call sees a
+        dangling tool_use and the provider rejects the whole conversation."""
+        tc = ToolCall(id="tc_1", name="test", arguments={})
+        chat_fn = MagicMock(
+            return_value=_response("go", stop_reason="tool_use", tool_calls=[tc])
+        )
+        on_tool_call = MagicMock(
+            return_value=ToolResult(tool_call_id="tc_1", output="ok")
+        )
+        on_budget = MagicMock(return_value=True)
+        messages = [Message(role="user", content="go")]
+        cb = LoopCallbacks(on_tool_call=on_tool_call, on_budget=on_budget)
+        run(chat_fn, messages, [], _config(), callbacks=cb)
+        on_tool_call.assert_called_once_with(tc)
+        assert messages[-1].role == "tool"
+        assert messages[-1].tool_result is not None
+        assert messages[-1].tool_result.tool_call_id == "tc_1"

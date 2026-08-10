@@ -1,0 +1,19 @@
+name: agent_budgets
+provider: anthropic
+model: claude-haiku-4-5-20251001
+tools: [read_file, content_search, list_provider_models, web_fetch, web_search, edit_file]
+loop: react
+max_turns: 15
+max_cost: 0.30
+permissions:
+  always_allow: [read_file, content_search, list_provider_models, web_fetch, web_search]
+  always_ask: [edit_file]
+hooks:
+  allowed_domains:
+    - www.anthropic.com
+    - anthropic.com
+    - api.anthropic.com
+    - openai.com
+    - platform.openai.com
+    - api.openai.com
+    - api.tavily.com

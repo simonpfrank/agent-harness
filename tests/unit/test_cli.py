@@ -3,9 +3,18 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+from rich.text import Text
 
-from agent_harness.cli import _apply_overrides, parse_args, run_agent, validate_config
-from agent_harness.types import AgentConfig
+from agent_harness.cli import (
+    _apply_overrides,
+    _domain_prompt,
+    _permission_prompt,
+    _plan_prompt,
+    parse_args,
+    run_agent,
+    validate_config,
+)
+from agent_harness.types import AgentConfig, ToolCall
 
 
 class TestParseArgs:
@@ -24,8 +33,8 @@ class TestParseArgs:
         assert args.verbose is True
 
     def test_model_override(self) -> None:
-        args = parse_args(["run", "./agents/hello", "--model", "gpt-4o-mini"])
-        assert args.model == "gpt-4o-mini"
+        args = parse_args(["run", "./agents/hello", "--model", "gpt-5-mini"])
+        assert args.model == "gpt-5-mini"
 
     def test_provider_override(self) -> None:
         args = parse_args(["run", "./agents/hello", "--provider", "openai"])
@@ -116,12 +125,20 @@ class TestApplyOverrides:
         assert args.max_turns is None
 
     def test_multiple_overrides(self) -> None:
-        args = parse_args([
-            "run", "./agents/hello",
-            "--provider", "openai", "--model", "gpt-4o-mini", "--max-turns", "3",
-        ])
+        args = parse_args(
+            [
+                "run",
+                "./agents/hello",
+                "--provider",
+                "openai",
+                "--model",
+                "gpt-5-mini",
+                "--max-turns",
+                "3",
+            ]
+        )
         assert args.provider == "openai"
-        assert args.model == "gpt-4o-mini"
+        assert args.model == "gpt-5-mini"
         assert args.max_turns == 3
 
     def test_run_requires_agent_dir(self) -> None:
@@ -170,13 +187,104 @@ class TestValidateConfig:
 
     def test_stream_on_openai_with_base_url_rejected(self) -> None:
         with pytest.raises(ValueError, match="stream"):
-            validate_config(_valid_config(
-                provider="openai", stream=True, provider_kwargs={"base_url": "http://localhost:1234/v1"},
-            ))
+            validate_config(
+                _valid_config(
+                    provider="openai",
+                    stream=True,
+                    provider_kwargs={"base_url": "http://localhost:1234/v1"},
+                )
+            )
 
     def test_thinking_on_non_anthropic_provider_rejected(self) -> None:
         with pytest.raises(ValueError, match="thinking"):
-            validate_config(_valid_config(provider="openai", provider_kwargs={"thinking": {"budget_tokens": 2000}}))
+            validate_config(
+                _valid_config(
+                    provider="openai",
+                    provider_kwargs={"thinking": {"budget_tokens": 2000}},
+                )
+            )
+
+
+class TestPermissionPromptMarkup:
+    """Args/domains are arbitrary content — must not be parsed as Rich markup."""
+
+    @patch("agent_harness.cli._console")
+    def test_permission_prompt_hint_disables_markup(
+        self, mock_console: MagicMock
+    ) -> None:
+        mock_console.input.return_value = "o"
+        _permission_prompt(
+            ToolCall(id="1", name="read_file", arguments={"path": "a.txt"})
+        )
+        _, kwargs = mock_console.input.call_args
+        assert kwargs.get("markup") is False
+
+    @patch("agent_harness.cli._console")
+    def test_permission_prompt_args_immune_to_markup(
+        self, mock_console: MagicMock
+    ) -> None:
+        mock_console.input.return_value = "o"
+        _permission_prompt(
+            ToolCall(id="1", name="read_file", arguments={"path": "list[str]"})
+        )
+        printed = [call.args[0] for call in mock_console.print.call_args_list]
+        assert any(
+            isinstance(obj, Text) and "list[str]" in obj.plain for obj in printed
+        )
+
+    @patch("agent_harness.cli._console")
+    def test_domain_prompt_disables_markup(self, mock_console: MagicMock) -> None:
+        mock_console.input.return_value = "y"
+        _domain_prompt("[malicious].example.com")
+        _, kwargs = mock_console.input.call_args
+        assert kwargs.get("markup") is False
+
+    @patch("agent_harness.cli._console")
+    def test_domain_prompt_announcement_immune_to_markup(
+        self, mock_console: MagicMock
+    ) -> None:
+        mock_console.input.return_value = "y"
+        _domain_prompt("[malicious].example.com")
+        printed = [call.args[0] for call in mock_console.print.call_args_list]
+        assert any(
+            isinstance(obj, Text) and "[malicious].example.com" in obj.plain
+            for obj in printed
+        )
+
+
+class TestPlanPromptMarkup:
+    """Step text is arbitrary content — must not be parsed as Rich markup."""
+
+    @patch("agent_harness.cli._console")
+    def test_disables_markup_on_input(self, mock_console: MagicMock) -> None:
+        mock_console.input.return_value = "y"
+        _plan_prompt(["Read the file", "Summarise it"])
+        _, kwargs = mock_console.input.call_args
+        assert kwargs.get("markup") is False
+
+    @patch("agent_harness.cli._console")
+    def test_step_text_immune_to_markup(self, mock_console: MagicMock) -> None:
+        mock_console.input.return_value = "y"
+        _plan_prompt(["Run list[str] through the parser"])
+        printed = [call.args[0] for call in mock_console.print.call_args_list]
+        assert any(
+            isinstance(obj, Text) and "list[str]" in obj.plain for obj in printed
+        )
+
+    @patch("agent_harness.cli._console")
+    def test_approves_on_y(self, mock_console: MagicMock) -> None:
+        mock_console.input.return_value = "y"
+        assert _plan_prompt(["Do it"]) is True
+
+    @patch("agent_harness.cli._console")
+    def test_rejects_on_n(self, mock_console: MagicMock) -> None:
+        mock_console.input.return_value = "n"
+        assert _plan_prompt(["Do it"]) is False
+
+    @patch("agent_harness.cli._console")
+    def test_rejects_on_anything_else(self, mock_console: MagicMock) -> None:
+        mock_console.input.return_value = ""
+        assert _plan_prompt(["Do it"]) is False
 
 
 class TestRunAgent:
@@ -235,6 +343,34 @@ class TestRunAgent:
         mock_config.load.return_value = cfg
         mock_prepare_runtime.return_value = runtime
         mock_prompt.return_value = "exit"
+
+        run_agent("./agents/hello")
+
+        runtime.run_messages.assert_not_called()
+        runtime.finalize.assert_called_once()
+
+    @patch("agent_harness.cli.prompt_user")
+    @patch("agent_harness.cli.prepare_runtime")
+    @patch("agent_harness.cli.config_loader")
+    def test_repl_mode_skips_empty_input(
+        self,
+        mock_config: MagicMock,
+        mock_prepare_runtime: MagicMock,
+        mock_prompt: MagicMock,
+    ) -> None:
+        cfg = AgentConfig(
+            name="test",
+            provider="anthropic",
+            model="claude-haiku-4-5-20251001",
+            agent_dir="/tmp/test",
+            instructions="Be helpful",
+            max_turns=5,
+        )
+        runtime = MagicMock()
+        runtime.init_messages.return_value = []
+        mock_config.load.return_value = cfg
+        mock_prepare_runtime.return_value = runtime
+        mock_prompt.side_effect = ["", "   ", "exit"]
 
         run_agent("./agents/hello")
 

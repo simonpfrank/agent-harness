@@ -66,6 +66,14 @@ def _has_network_intent(tool_call: ToolCall) -> tuple[bool, str]:
         for pattern in _NETWORK_CODE_PATTERNS:
             if re.search(pattern, code):
                 return True, code
+    elif tool_call.name == "web_fetch":
+        return True, tool_call.arguments.get("url", "")
+    elif tool_call.name == "web_search":
+        return True, "https://api.tavily.com"
+    elif tool_call.name == "list_provider_models":
+        provider = tool_call.arguments.get("provider", "")
+        host = "https://api.anthropic.com" if provider == "anthropic" else "https://api.openai.com"
+        return True, host
     return False, ""
 
 

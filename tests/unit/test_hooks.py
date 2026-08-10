@@ -185,6 +185,67 @@ class TestNetworkExfiltrationBlocker:
         tc = _tool_call("read_file", path="curl.txt")
         assert self._hooks().run_before_tool(tc) is tc
 
+    def test_blocks_web_fetch_no_whitelist(self) -> None:
+        tc = _tool_call("web_fetch", url="https://evil.com/data")
+        assert self._hooks().run_before_tool(tc) is None
+
+    def test_allows_whitelisted_web_fetch_domain(self) -> None:
+        hooks = Hooks(
+            {"before_tool": ["network_exfiltration_blocker"], "after_tool": [],
+             "allowed_domains": ["anthropic.com"]},
+        )
+        tc = _tool_call("web_fetch", url="https://anthropic.com/pricing")
+        assert hooks.run_before_tool(tc) is tc
+
+    def test_web_fetch_prompt_approves(self) -> None:
+        hooks = Hooks(
+            {"before_tool": ["network_exfiltration_blocker"], "after_tool": []},
+            domain_prompt_fn=lambda d: True,
+        )
+        tc = _tool_call("web_fetch", url="https://example.com/pricing")
+        assert hooks.run_before_tool(tc) is tc
+
+    def test_blocks_web_search_no_whitelist(self) -> None:
+        tc = _tool_call("web_search", query="anthropic api pricing")
+        assert self._hooks().run_before_tool(tc) is None
+
+    def test_web_search_prompt_approves_and_remembers(self) -> None:
+        call_count = 0
+
+        def approve(domain: str) -> bool:
+            nonlocal call_count
+            call_count += 1
+            return True
+
+        hooks = Hooks(
+            {"before_tool": ["network_exfiltration_blocker"], "after_tool": []},
+            domain_prompt_fn=approve,
+        )
+        tc = _tool_call("web_search", query="anthropic api pricing")
+        assert hooks.run_before_tool(tc) is tc
+        assert hooks.run_before_tool(tc) is tc
+        assert call_count == 1
+
+    def test_blocks_list_provider_models_no_whitelist(self) -> None:
+        tc = _tool_call("list_provider_models", provider="anthropic")
+        assert self._hooks().run_before_tool(tc) is None
+
+    def test_allows_whitelisted_list_provider_models_domain(self) -> None:
+        hooks = Hooks(
+            {"before_tool": ["network_exfiltration_blocker"], "after_tool": [],
+             "allowed_domains": ["api.anthropic.com"]},
+        )
+        tc = _tool_call("list_provider_models", provider="anthropic")
+        assert hooks.run_before_tool(tc) is tc
+
+    def test_list_provider_models_openai_domain(self) -> None:
+        hooks = Hooks(
+            {"before_tool": ["network_exfiltration_blocker"], "after_tool": [],
+             "allowed_domains": ["api.openai.com"]},
+        )
+        tc = _tool_call("list_provider_models", provider="openai")
+        assert hooks.run_before_tool(tc) is tc
+
     def test_allows_whitelisted_domain(self) -> None:
         hooks = Hooks(
             {"before_tool": ["network_exfiltration_blocker"], "after_tool": [],

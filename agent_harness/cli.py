@@ -8,6 +8,7 @@ import sys
 
 from dotenv import load_dotenv
 from rich.console import Console
+from rich.text import Text
 
 from agent_harness import config as config_loader
 from agent_harness.display import prompt_user
@@ -107,10 +108,10 @@ def _permission_prompt(tool_call: ToolCall) -> PermissionDecision:
         Explicit permission decision selected by the user.
     """
     args_str = json.dumps(tool_call.arguments, indent=2)
-    _console.print(f"[bold yellow]Tool:[/bold yellow] {tool_call.name}")
-    _console.print(f"[bold yellow]Args:[/bold yellow] {args_str}")
+    _console.print(Text("Tool: ", style="bold yellow") + Text(tool_call.name))
+    _console.print(Text("Args: ", style="bold yellow") + Text(args_str))
     choice = _console.input(
-        "[o]nce / allow for [s]ession / allow [p]ersistently / [d]eny? "
+        "[o]nce / allow for [s]ession / allow [p]ersistently / [d]eny? ", markup=False,
     ).strip().lower()
     if choice == "o":
         return PermissionDecision.allow_once()
@@ -130,9 +131,28 @@ def _domain_prompt(domain: str) -> bool:
     Returns:
         `True` if the user approves the domain for this workspace.
     """
-    choice = _console.input(
-        f"[bold yellow]Allow network access to [cyan]{domain}[/cyan]?[/bold yellow] [y/n] "
-    ).strip().lower()
+    _console.print(
+        Text("Allow network access to ", style="bold yellow")
+        + Text(domain, style="cyan")
+        + Text("?", style="bold yellow"),
+    )
+    choice = _console.input("[y/n] ", markup=False).strip().lower()
+    return choice in ("y", "yes")
+
+
+def _plan_prompt(steps: list[str]) -> bool:
+    """Ask the user whether to approve a generated plan before it executes.
+
+    Args:
+        steps: Numbered plan steps.
+
+    Returns:
+        `True` if the user approves executing the plan.
+    """
+    _console.print(Text("Proposed plan:", style="bold yellow"))
+    for i, step in enumerate(steps, start=1):
+        _console.print(Text(f"  {i}. {step}"))
+    choice = _console.input("Approve this plan? [y/n] ", markup=False).strip().lower()
     return choice in ("y", "yes")
 
 
@@ -160,6 +180,7 @@ def run_agent(
             config,
             permission_prompt_fn=_permission_prompt,
             domain_prompt_fn=_domain_prompt,
+            plan_prompt_fn=_plan_prompt,
             show_output=True,
             trace_enabled=True,
         )
@@ -183,6 +204,8 @@ def run_agent(
             user_input = prompt_user()
             if user_input.strip().lower() in ("exit", "quit"):
                 break
+            if not user_input.strip():
+                continue
             runtime.run_messages(messages, prompt=user_input)
             if session_path:
                 save_session(messages, session_path)

@@ -17,6 +17,14 @@ _PLAN_PROMPT_SUFFIX = (
     "Do not execute anything yet — just list the steps."
 )
 
+_PLAN_CRITIQUE_PROMPT = (
+    "Critique this plan for completeness, correctness, and ordering. "
+    "If it's good, respond with DONE. Otherwise respond with a revised "
+    "numbered plan (1. 2. 3. ...)."
+)
+
+_MAX_PLAN_CRITIQUE_ROUNDS = 2
+
 
 def _parse_plan(text: str) -> list[str]:
     """Extract numbered steps from a plan text.
@@ -72,6 +80,29 @@ def run(
     if not steps:
         logger.warning("No steps found in plan — falling back to react")
         return react_run(chat_fn, messages, tool_schemas, config, callbacks)
+
+    # Phase 1.5: Critique the plan (bounded, tool-less — same convention as Phase 1)
+    for _ in range(_MAX_PLAN_CRITIQUE_ROUNDS):
+        messages.append(Message(role="user", content=_PLAN_CRITIQUE_PROMPT))
+        critique = chat_fn(messages, [], model=config.model, stream=config.stream, **config.provider_kwargs)
+        messages.append(critique.message)
+        if cb.on_response:
+            cb.on_response(critique)
+
+        critique_text = critique.message.content or ""
+        if "DONE" in critique_text.upper():
+            break
+        revised_steps = _parse_plan(critique_text)
+        if revised_steps:
+            steps = revised_steps
+        else:
+            logger.warning("Plan critique returned neither DONE nor a parseable revised plan — keeping current plan")
+            break
+
+    # Human approval gate (optional — inert if not wired)
+    if cb.on_plan_approval and not cb.on_plan_approval(steps):
+        logger.info("Plan rejected by human approval gate")
+        return "Plan was not approved. No steps were executed."
 
     # Phase 2: Execute each step with a mini react loop
     for i, step in enumerate(steps):

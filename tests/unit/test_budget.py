@@ -1,6 +1,6 @@
 """Tests for agent_harness.budget."""
 
-from agent_harness.budget import COST_TABLE, Budget
+from agent_harness.budget import Budget
 from agent_harness.types import AgentConfig, Usage
 
 
@@ -29,14 +29,14 @@ class TestBudgetTurnTracking:
         usage = Usage(input_tokens=10, output_tokens=10)
         assert budget.record(usage) is False  # turn 1
         assert budget.record(usage) is False  # turn 2
-        assert budget.record(usage) is True   # turn 3 — hit limit
+        assert budget.record(usage) is True  # turn 3 — hit limit
 
 
 class TestBudgetCostTracking:
     def test_tracks_cost(self) -> None:
         budget = Budget(_config(max_cost=0.001))
-        # Haiku pricing: $0.80/M input, $4.00/M output
-        # 1000 input tokens = $0.0008, 1000 output = $0.004 → total $0.0048
+        # Haiku pricing (MODEL_REGISTRY): $1.00/M input, $5.00/M output
+        # 1000 input tokens = $0.001, 1000 output = $0.005 → total $0.006
         usage = Usage(input_tokens=1000, output_tokens=1000)
         assert budget.record(usage) is True  # exceeds $0.001
 
@@ -71,21 +71,39 @@ class TestBudgetRawProperties:
         assert budget.total_cost > 0.0
 
 
-class TestSupportedOpenAICosts:
-    def test_supported_openai_models_have_cost_entries(self) -> None:
-        expected_models = {
-            "gpt-4o",
-            "gpt-4o-mini",
-            "gpt-5.4",
-            "gpt-5.4-mini",
-            "gpt-5.4-nano",
-            "gpt-5.1",
-            "gpt-5-mini",
-            "gpt-5-nano",
-        }
-        actual_models = {
-            model
-            for provider, model in COST_TABLE
-            if provider == "openai"
-        }
-        assert expected_models.issubset(actual_models)
+class TestBudgetStatusNote:
+    def test_turns_only_when_no_max_cost(self) -> None:
+        budget = Budget(_config(max_turns=5, max_cost=None))
+        note = budget.status_note()
+        assert note == "You have 5 turn(s) remaining."
+
+    def test_includes_cost_when_max_cost_set(self) -> None:
+        budget = Budget(_config(max_turns=5, max_cost=0.50))
+        note = budget.status_note()
+        assert "5 turn(s) remaining" in note
+        assert "$0.5000 remaining" in note
+
+    def test_reflects_consumed_turns(self) -> None:
+        budget = Budget(_config(max_turns=5, max_cost=None))
+        budget.record(Usage(input_tokens=10, output_tokens=10))
+        note = budget.status_note()
+        assert "4 turn(s) remaining" in note
+
+    def test_reflects_consumed_cost(self) -> None:
+        budget = Budget(_config(max_turns=10, max_cost=0.01))
+        budget.record(Usage(input_tokens=1000, output_tokens=1000))
+        note = budget.status_note()
+        assert "$" in note
+
+    def test_remaining_turns_never_negative(self) -> None:
+        budget = Budget(_config(max_turns=1, max_cost=None))
+        budget.record(Usage(input_tokens=10, output_tokens=10))
+        budget.record(Usage(input_tokens=10, output_tokens=10))
+        note = budget.status_note()
+        assert "0 turn(s) remaining" in note
+
+    def test_remaining_cost_never_negative(self) -> None:
+        budget = Budget(_config(max_turns=10, max_cost=0.0001))
+        budget.record(Usage(input_tokens=10_000, output_tokens=10_000))
+        note = budget.status_note()
+        assert "$0.0000 remaining" in note

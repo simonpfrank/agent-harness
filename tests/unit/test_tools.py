@@ -2,17 +2,22 @@
 
 import os
 import tempfile
+from unittest.mock import MagicMock, patch
 
 from agent_harness.tools import (
     ToolRuntimeContext,
     build_tool_registry,
+    edit_file,
     execute_code,
     execute_tool,
     generate_schema,
     list_directory,
+    list_provider_models,
     read_file,
     registry,
     run_command,
+    web_fetch,
+    web_search,
     write_file,
 )
 from agent_harness.types import ToolCall
@@ -171,6 +176,187 @@ class TestWriteFile:
 
     def test_registered(self) -> None:
         assert "write_file" in registry
+
+
+class TestEditFile:
+    def test_replaces_single_match(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "file.py")
+            with open(path, "w") as f:
+                f.write("def foo():\n    return 1\n")
+            result = edit_file(path, "return 1", "return 2")
+            with open(path) as f:
+                assert f.read() == "def foo():\n    return 2\n"
+            assert "file.py" in result
+
+    def test_no_match_raises(self) -> None:
+        import pytest
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "file.py")
+            with open(path, "w") as f:
+                f.write("def foo():\n    return 1\n")
+            with pytest.raises(ValueError, match="not found"):
+                edit_file(path, "return 99", "return 2")
+
+    def test_multiple_matches_raises(self) -> None:
+        import pytest
+
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "file.py")
+            with open(path, "w") as f:
+                f.write("x = 1\nx = 1\n")
+            with pytest.raises(ValueError, match="not unique"):
+                edit_file(path, "x = 1", "x = 2")
+
+    def test_missing_file_raises(self) -> None:
+        import pytest
+
+        with pytest.raises(FileNotFoundError):
+            edit_file("/no/such/file.py", "a", "b")
+
+    def test_registered(self) -> None:
+        assert "edit_file" in registry
+
+
+class TestWebFetch:
+    @patch("agent_harness.tools.trafilatura.extract")
+    @patch("agent_harness.tools.httpx.get")
+    def test_extracts_main_content(self, mock_get: MagicMock, mock_extract: MagicMock) -> None:
+        mock_response = MagicMock()
+        mock_response.text = "<html><body><nav>menu</nav><p>The real content</p></body></html>"
+        mock_response.raise_for_status.return_value = None
+        mock_get.return_value = mock_response
+        mock_extract.return_value = "The real content"
+
+        result = web_fetch("https://example.com/pricing")
+
+        assert result == "The real content"
+        mock_get.assert_called_once()
+        assert mock_get.call_args.args[0] == "https://example.com/pricing"
+        mock_extract.assert_called_once_with(mock_response.text, output_format="markdown")
+
+    @patch("agent_harness.tools.trafilatura.extract")
+    @patch("agent_harness.tools.httpx.get")
+    def test_falls_back_to_raw_text_when_extraction_fails(
+        self, mock_get: MagicMock, mock_extract: MagicMock,
+    ) -> None:
+        mock_response = MagicMock()
+        mock_response.text = "short page"
+        mock_response.raise_for_status.return_value = None
+        mock_get.return_value = mock_response
+        mock_extract.return_value = None
+
+        result = web_fetch("https://example.com/tiny")
+        assert result == "short page"
+
+    @patch("agent_harness.tools.httpx.get")
+    def test_raises_on_http_error(self, mock_get: MagicMock) -> None:
+        import httpx
+        import pytest
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "404", request=MagicMock(), response=MagicMock(status_code=404),
+        )
+        mock_get.return_value = mock_response
+
+        with pytest.raises(httpx.HTTPStatusError):
+            web_fetch("https://example.com/missing")
+
+    def test_registered(self) -> None:
+        assert "web_fetch" in registry
+
+
+class TestListProviderModels:
+    @patch("agent_harness.tools.anthropic.Anthropic")
+    def test_lists_anthropic_models(self, mock_anthropic_cls: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_client.models.list.return_value = [
+            MagicMock(id="claude-haiku-4-5-20251001"),
+            MagicMock(id="claude-opus-5-20260101"),
+        ]
+        mock_anthropic_cls.return_value = mock_client
+
+        result = list_provider_models("anthropic")
+
+        assert "claude-haiku-4-5-20251001" in result
+        assert "claude-opus-5-20260101" in result
+
+    @patch("agent_harness.tools.openai.OpenAI")
+    def test_lists_openai_models(self, mock_openai_cls: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_client.models.list.return_value = [
+            MagicMock(id="gpt-4o"),
+            MagicMock(id="o4-mini"),
+        ]
+        mock_openai_cls.return_value = mock_client
+
+        result = list_provider_models("openai")
+
+        assert "gpt-4o" in result
+        assert "o4-mini" in result
+
+    def test_unknown_provider_raises(self) -> None:
+        import pytest
+
+        with pytest.raises(ValueError, match="Unknown provider"):
+            list_provider_models("fakellm")
+
+    @patch("agent_harness.tools.anthropic.Anthropic")
+    def test_no_models_found(self, mock_anthropic_cls: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_client.models.list.return_value = []
+        mock_anthropic_cls.return_value = mock_client
+
+        result = list_provider_models("anthropic")
+        assert result == "No models found."
+
+    def test_registered(self) -> None:
+        assert "list_provider_models" in registry
+
+
+class TestWebSearch:
+    @patch.dict(os.environ, {"TAVILY_API_KEY": "tvly-test-key"})
+    @patch("agent_harness.tools.httpx.post")
+    def test_formats_results(self, mock_post: MagicMock) -> None:
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {
+            "results": [
+                {"title": "Anthropic Pricing", "url": "https://anthropic.com/pricing", "content": "Rates per model."},
+            ],
+        }
+        mock_post.return_value = mock_response
+
+        result = web_search("anthropic api pricing")
+
+        assert "Anthropic Pricing" in result
+        assert "https://anthropic.com/pricing" in result
+        assert "Rates per model." in result
+        call_kwargs = mock_post.call_args.kwargs
+        assert call_kwargs["headers"]["Authorization"] == "Bearer tvly-test-key"
+        assert call_kwargs["json"]["query"] == "anthropic api pricing"
+
+    @patch.dict(os.environ, {"TAVILY_API_KEY": "tvly-test-key"})
+    @patch("agent_harness.tools.httpx.post")
+    def test_no_results(self, mock_post: MagicMock) -> None:
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {"results": []}
+        mock_post.return_value = mock_response
+
+        assert web_search("a query with no hits") == "No results found."
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_missing_api_key_raises(self) -> None:
+        import pytest
+
+        with pytest.raises(RuntimeError, match="TAVILY_API_KEY"):
+            web_search("anything")
+
+    def test_registered(self) -> None:
+        assert "web_search" in registry
 
 
 class TestListDirectory:

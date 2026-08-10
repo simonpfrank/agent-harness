@@ -7,6 +7,7 @@ import json
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.text import Text
 
 from agent_harness.types import Response, ToolCall, ToolResult
 
@@ -31,7 +32,7 @@ def show_tool_call(tool_call: ToolCall) -> None:
         tool_call: The tool call to display.
     """
     args_str = json.dumps(tool_call.arguments, indent=2)
-    console.print(Panel(args_str, title=f"Tool: {tool_call.name}", border_style="blue"))
+    console.print(Panel(Text(args_str), title=Text(f"Tool: {tool_call.name}"), border_style="blue"))
 
 
 def show_tool_result(result: ToolResult) -> None:
@@ -41,11 +42,11 @@ def show_tool_result(result: ToolResult) -> None:
         result: The tool result to display.
     """
     if result.error:
-        console.print(Panel(result.error, title="Error", border_style="red"))
+        console.print(Panel(Text(result.error), title="Error", border_style="red"))
     else:
         output = result.output or ""
         truncated = output[:2000] + "..." if len(output) > 2000 else output
-        console.print(Panel(truncated, title="Result", border_style="green"))
+        console.print(Panel(Text(truncated), title="Result", border_style="green"))
 
 
 def show_delta(text: str) -> None:
@@ -54,7 +55,7 @@ def show_delta(text: str) -> None:
     Args:
         text: Text delta to append to the current line.
     """
-    console.print(text, end="")
+    console.print(Text(text), end="")
 
 
 def show_thinking_delta(text: str) -> None:
@@ -63,7 +64,7 @@ def show_thinking_delta(text: str) -> None:
     Args:
         text: Thinking text delta to append to the current line.
     """
-    console.print(f"[dim]{text}[/dim]", end="")
+    console.print(Text(text, style="dim"), end="")
 
 
 def show_budget(summary: str) -> None:
@@ -72,7 +73,7 @@ def show_budget(summary: str) -> None:
     Args:
         summary: Human-readable budget summary string.
     """
-    console.print(f"[dim]{summary}[/dim]")
+    console.print(Text(summary, style="dim"))
 
 
 def prompt_user() -> str:

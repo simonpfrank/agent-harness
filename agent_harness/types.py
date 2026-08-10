@@ -85,6 +85,8 @@ class AgentConfig:
 OnResponse = Callable[[Response], None]
 OnToolCall = Callable[[ToolCall], ToolResult | None]
 OnBudget = Callable[[Usage], bool]
+OnBudgetStatus = Callable[[], str]
+OnPlanApproval = Callable[[list[str]], bool]
 OnDelta = Callable[[str, str], None]
 
 
@@ -95,5 +97,7 @@ class LoopCallbacks:
     on_response: OnResponse | None = None
     on_tool_call: OnToolCall | None = None
     on_budget: OnBudget | None = None
+    get_budget_status: OnBudgetStatus | None = None
+    on_plan_approval: OnPlanApproval | None = None
     on_delta: OnDelta | None = None
     on_thinking_delta: OnDelta | None = None

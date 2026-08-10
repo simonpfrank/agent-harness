@@ -46,8 +46,11 @@ class TestConfigAndToolsIntegration:
     def test_tool_execution_read_file(self) -> None:
         from agent_harness.types import ToolCall
 
-        tc = ToolCall(id="tc_1", name="read_file",
-                      arguments={"path": "agents/hello/instructions.md"})
+        tc = ToolCall(
+            id="tc_1",
+            name="read_file",
+            arguments={"path": "agents/hello/instructions.md"},
+        )
         result = execute_tool(tc)
         assert result.error is None
         assert "helpful assistant" in (result.output or "")
@@ -55,8 +58,9 @@ class TestConfigAndToolsIntegration:
     def test_tool_error_returned_not_crashed(self) -> None:
         from agent_harness.types import ToolCall
 
-        tc = ToolCall(id="tc_2", name="read_file",
-                      arguments={"path": "/nonexistent/path.txt"})
+        tc = ToolCall(
+            id="tc_2", name="read_file", arguments={"path": "/nonexistent/path.txt"}
+        )
         result = execute_tool(tc)
         assert result.error is not None
         assert result.output is None
@@ -85,7 +89,7 @@ class TestProviderKwargsPassthrough:
         result = chat(
             [Message(role="user", content="Reply with just the word ok.")],
             tools=[],
-            model="gpt-4o-mini",
+            model="gpt-5-mini",
             temperature=0.0,
             max_tokens=50,
         )
@@ -93,13 +97,13 @@ class TestProviderKwargsPassthrough:
 
     @requires_openai_key
     def test_openai_gpt_5_4_mini_accepts_max_tokens(self) -> None:
-        """GPT-5.4-mini runs through the provider without provider-shape errors."""
+        """gpt-5.6-luna runs through the provider without provider-shape errors."""
         from agent_harness.providers.openai_provider import chat
 
         result = chat(
             [Message(role="user", content="Reply with just the word ok.")],
             tools=[],
-            model="gpt-5.4-mini",
+            model="gpt-5.6-luna",
             max_tokens=50,
         )
         assert result.message.content is not None
@@ -156,8 +160,11 @@ class TestStreamingIntegration:
             ),
         ]
         first = chat(
-            messages, tools=schemas, model="claude-haiku-4-5-20251001",
-            max_tokens=2048, thinking={"budget_tokens": 1024},
+            messages,
+            tools=schemas,
+            model="claude-haiku-4-5-20251001",
+            max_tokens=2048,
+            thinking={"budget_tokens": 1024},
         )
         messages.append(first.message)
 
@@ -167,8 +174,11 @@ class TestStreamingIntegration:
                 messages.append(Message(role="tool", tool_result=result))
 
             second = chat(
-                messages, tools=schemas, model="claude-haiku-4-5-20251001",
-                max_tokens=2048, thinking={"budget_tokens": 1024},
+                messages,
+                tools=schemas,
+                model="claude-haiku-4-5-20251001",
+                max_tokens=2048,
+                thinking={"budget_tokens": 1024},
             )
             assert second.message.content is not None
 
@@ -188,7 +198,7 @@ class TestOpenAIStreamingIntegration:
         result = chat(
             [Message(role="user", content="Reply with just the word ok.")],
             tools=[],
-            model="gpt-4o-mini",
+            model="gpt-5-mini",
             max_tokens=50,
             stream=True,
             on_delta=on_delta,
@@ -233,7 +243,9 @@ class TestRealLLMIntegration:
 
         messages = [
             Message(role="system", content=cfg.instructions),
-            Message(role="user", content="List the files in the agents/hello directory."),
+            Message(
+                role="user", content="List the files in the agents/hello directory."
+            ),
         ]
         cb = LoopCallbacks(on_tool_call=execute_tool)
         result = run(chat_fn, messages, schemas, cfg, callbacks=cb)
@@ -247,7 +259,10 @@ class TestRealLLMIntegration:
 
         messages = [
             Message(role="system", content=cfg.instructions),
-            Message(role="user", content="Read agents/hello/config.yaml and tell me the model name."),
+            Message(
+                role="user",
+                content="Read agents/hello/config.yaml and tell me the model name.",
+            ),
         ]
         cb = LoopCallbacks(on_tool_call=execute_tool)
         result = run(chat_fn, messages, schemas, cfg, callbacks=cb)
@@ -296,7 +311,10 @@ class TestOpenAIIntegration:
 
         messages = [
             Message(role="system", content=cfg.instructions),
-            Message(role="user", content="List the files in the tests/data/agent_openai directory."),
+            Message(
+                role="user",
+                content="List the files in the tests/data/agent_openai directory.",
+            ),
         ]
         cb = LoopCallbacks(on_tool_call=execute_tool)
         result = run(chat_fn, messages, schemas, cfg, callbacks=cb)
@@ -310,7 +328,10 @@ class TestOpenAIIntegration:
 
         messages = [
             Message(role="system", content=cfg.instructions),
-            Message(role="user", content="Read tests/data/agent_openai/config.yaml and tell me the provider name."),
+            Message(
+                role="user",
+                content="Read tests/data/agent_openai/config.yaml and tell me the provider name.",
+            ),
         ]
         cb = LoopCallbacks(on_tool_call=execute_tool)
         result = run(chat_fn, messages, schemas, cfg, callbacks=cb)
