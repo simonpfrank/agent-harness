@@ -79,6 +79,7 @@ class AgentConfig:
     hooks: dict[str, Any] = field(default_factory=dict)
     stream: bool = False
     show_thinking: bool = False
+    mcp_servers: list[dict[str, Any]] = field(default_factory=list)
 
 
 # Callback type aliases

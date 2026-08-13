@@ -1,0 +1,11 @@
+name: mcp-agent
+provider: anthropic
+model: claude-haiku-4-5-20251001
+tools: [read_file]
+max_turns: 5
+mcp_servers:
+  - name: filesystem
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+    env:
+      SOME_VAR: "1"

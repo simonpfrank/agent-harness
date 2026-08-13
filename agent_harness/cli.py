@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 
 from dotenv import load_dotenv
@@ -98,6 +99,30 @@ def _apply_overrides(config: AgentConfig, overrides: dict[str, object]) -> Agent
     return config
 
 
+_BRACKETED_CHOICE = re.compile(r"\[([^\[\]]+)\]")
+
+
+def _highlight_choices(prompt: str) -> Text:
+    """Style each `[x]`-bracketed choice so the keystroke it needs stands out.
+
+    Args:
+        prompt: Static prompt hint text containing `[x]`-style choice markers.
+
+    Returns:
+        A `Text` with the bracketed content styled `bold cyan`.
+    """
+    result = Text()
+    pos = 0
+    for match in _BRACKETED_CHOICE.finditer(prompt):
+        result.append(prompt[pos : match.start()])
+        result.append("[")
+        result.append(match.group(1), style="bold cyan")
+        result.append("]")
+        pos = match.end()
+    result.append(prompt[pos:])
+    return result
+
+
 def _permission_prompt(tool_call: ToolCall) -> PermissionDecision:
     """Ask the user whether to allow a tool call.
 
@@ -111,7 +136,8 @@ def _permission_prompt(tool_call: ToolCall) -> PermissionDecision:
     _console.print(Text("Tool: ", style="bold yellow") + Text(tool_call.name))
     _console.print(Text("Args: ", style="bold yellow") + Text(args_str))
     choice = _console.input(
-        "[o]nce / allow for [s]ession / allow [p]ersistently / [d]eny? ", markup=False,
+        _highlight_choices("[o]nce / allow for [s]ession / allow [p]ersistently / [d]eny? "),
+        markup=False,
     ).strip().lower()
     if choice == "o":
         return PermissionDecision.allow_once()
@@ -136,7 +162,7 @@ def _domain_prompt(domain: str) -> bool:
         + Text(domain, style="cyan")
         + Text("?", style="bold yellow"),
     )
-    choice = _console.input("[y/n] ", markup=False).strip().lower()
+    choice = _console.input(_highlight_choices("[y/n] "), markup=False).strip().lower()
     return choice in ("y", "yes")
 
 
@@ -152,7 +178,7 @@ def _plan_prompt(steps: list[str]) -> bool:
     _console.print(Text("Proposed plan:", style="bold yellow"))
     for i, step in enumerate(steps, start=1):
         _console.print(Text(f"  {i}. {step}"))
-    choice = _console.input("Approve this plan? [y/n] ", markup=False).strip().lower()
+    choice = _console.input(_highlight_choices("Approve this plan? [y/n] "), markup=False).strip().lower()
     return choice in ("y", "yes")
 
 

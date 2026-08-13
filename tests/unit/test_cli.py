@@ -287,6 +287,46 @@ class TestPlanPromptMarkup:
         assert _plan_prompt(["Do it"]) is False
 
 
+def _bright_spans(prompt: Text, style: str = "bold cyan") -> list[str]:
+    """Extract the substrings styled `style` from a prompt Text, in order."""
+    return [prompt.plain[span.start : span.end] for span in prompt.spans if span.style == style]
+
+
+class TestPromptChoiceHighlighting:
+    """The keystroke a prompt expects should stand out from the rest of the hint."""
+
+    @patch("agent_harness.cli._console")
+    def test_permission_prompt_highlights_each_letter(
+        self, mock_console: MagicMock
+    ) -> None:
+        mock_console.input.return_value = "o"
+        _permission_prompt(
+            ToolCall(id="1", name="read_file", arguments={"path": "a.txt"})
+        )
+        prompt_arg = mock_console.input.call_args.args[0]
+        assert isinstance(prompt_arg, Text)
+        assert prompt_arg.plain == "[o]nce / allow for [s]ession / allow [p]ersistently / [d]eny? "
+        assert _bright_spans(prompt_arg) == ["o", "s", "p", "d"]
+
+    @patch("agent_harness.cli._console")
+    def test_domain_prompt_highlights_choice(self, mock_console: MagicMock) -> None:
+        mock_console.input.return_value = "y"
+        _domain_prompt("example.com")
+        prompt_arg = mock_console.input.call_args.args[0]
+        assert isinstance(prompt_arg, Text)
+        assert prompt_arg.plain == "[y/n] "
+        assert _bright_spans(prompt_arg) == ["y/n"]
+
+    @patch("agent_harness.cli._console")
+    def test_plan_prompt_highlights_choice(self, mock_console: MagicMock) -> None:
+        mock_console.input.return_value = "y"
+        _plan_prompt(["Do it"])
+        prompt_arg = mock_console.input.call_args.args[0]
+        assert isinstance(prompt_arg, Text)
+        assert prompt_arg.plain == "Approve this plan? [y/n] "
+        assert _bright_spans(prompt_arg) == ["y/n"]
+
+
 class TestRunAgent:
     @patch("agent_harness.cli.prepare_runtime")
     @patch("agent_harness.cli.config_loader")

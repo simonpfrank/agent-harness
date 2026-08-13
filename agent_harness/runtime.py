@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,6 +19,7 @@ from agent_harness.display import (
 )
 from agent_harness.hooks import Hooks
 from agent_harness.loops import registry as loop_registry
+from agent_harness.mcp_client import McpManager, McpServerSpec
 from agent_harness.permissions import PermissionDecision, Permissions
 from agent_harness.providers import registry as provider_registry
 from agent_harness.session import load_session
@@ -44,10 +46,62 @@ from agent_harness.types import (
 PermissionPromptFn = Callable[[ToolCall], PermissionDecision | bool]
 DomainPromptFn = Callable[[str], bool]
 
+logger = logging.getLogger(__name__)
+
 
 class _NullTracer:
     def record(self, _event: str, **_data: object) -> None:
         return
+
+
+def _build_mcp_tool_callable(manager: McpManager, server: str, name: str) -> Callable[..., str]:
+    def _call(**kwargs: Any) -> str:
+        return manager.call_tool(server, name, kwargs)
+
+    _call.__name__ = name
+    return _call
+
+
+def _start_mcp_manager(
+    config: AgentConfig,
+    tool_registry: dict[str, Callable[..., str]],
+) -> tuple[McpManager | None, list[dict[str, Any]]]:
+    """Start any configured MCP servers and merge their tools into the registry.
+
+    Args:
+        config: Loaded agent configuration. `mcp_servers` (if any) drives
+            which servers to connect to; `tools` is what this agent
+            actually exposes to the model — the collision check is against
+            this, not the full tool registry, since an unexposed built-in
+            (present in the registry but never offered to the model) isn't
+            really competing with an MCP tool of the same name.
+        tool_registry: Registry to merge discovered MCP tools into, mutated
+            in place. A tool whose name is already exposed via `config.tools`,
+            or already claimed by an earlier MCP server in this same merge,
+            is skipped — not overwritten.
+
+    Returns:
+        The started manager (`None` if no servers are configured) and the
+        schema dicts for every tool that was actually merged in.
+    """
+    if not config.mcp_servers:
+        return None, []
+    manager = McpManager([McpServerSpec(**spec) for spec in config.mcp_servers])
+    manager.start()
+    exposed_names = set(config.tools)
+    claimed_by_mcp: set[str] = set()
+    schemas: list[dict[str, Any]] = []
+    for tool in manager.list_tools():
+        name = tool["name"]
+        if name in exposed_names or name in claimed_by_mcp:
+            logger.warning(
+                "MCP tool '%s' from server '%s' skipped — name collision", name, tool["server"],
+            )
+            continue
+        tool_registry[name] = _build_mcp_tool_callable(manager, tool["server"], name)
+        claimed_by_mcp.add(name)
+        schemas.append({"name": name, "description": tool["description"], "input_schema": tool["input_schema"]})
+    return manager, schemas
 
 
 @dataclass
@@ -64,6 +118,8 @@ class PreparedRuntime:
         permissions: Permission manager for the current run.
         tracer: Structured trace sink, or a no-op tracer when tracing is disabled.
         budget: Turn/cost tracker for this run.
+        mcp_manager: Connections to this run's configured MCP servers, or
+            None if the agent has none configured.
     """
 
     config: AgentConfig
@@ -75,6 +131,7 @@ class PreparedRuntime:
     permissions: Permissions
     tracer: Tracer | _NullTracer
     budget: Budget
+    mcp_manager: McpManager | None = None
 
     def init_messages(
         self,
@@ -117,9 +174,12 @@ class PreparedRuntime:
     def finalize(self) -> None:
         """Persist runtime state that should survive the current process.
 
-        Currently this means writing persistent permission approvals if they changed.
+        Writes persistent permission approvals if they changed, and closes
+        any MCP server connections this run opened.
         """
         self.permissions.save()
+        if self.mcp_manager is not None:
+            self.mcp_manager.close()
 
 
 def build_system_prompt(config: AgentConfig) -> str:
@@ -361,7 +421,8 @@ def prepare_runtime(
     )
     chat_fn = provider_registry[config.provider]
     loop_fn = loop_registry[config.loop]
-    tool_schemas = [generate_schema(tool_registry[name]) for name in config.tools]
+    mcp_manager, mcp_tool_schemas = _start_mcp_manager(config, tool_registry)
+    tool_schemas = [generate_schema(tool_registry[name]) for name in config.tools] + mcp_tool_schemas
     return PreparedRuntime(
         config=config,
         chat_fn=chat_fn,
@@ -372,4 +433,5 @@ def prepare_runtime(
         permissions=permissions,
         tracer=tracer,
         budget=budget,
+        mcp_manager=mcp_manager,
     )

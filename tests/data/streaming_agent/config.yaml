@@ -1,0 +1,8 @@
+name: streaming-agent
+provider: anthropic
+model: claude-haiku-4-5-20251001
+stream: true
+show_thinking: true
+provider_kwargs:
+  thinking:
+    budget_tokens: 2000

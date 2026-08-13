@@ -9,6 +9,7 @@ from agent_harness.runtime import _make_callbacks, prepare_runtime
 from agent_harness.types import LoopCallbacks, Message, Response, Usage
 
 VALID_AGENT = "tests/data/valid_agent"
+WITH_MCP_SERVERS = "tests/data/agent_with_mcp_servers"
 
 
 def _callbacks(*, stream: bool, show_thinking: bool, show_output: bool = True) -> LoopCallbacks:
@@ -184,3 +185,137 @@ class TestPreparedRuntimeBudget:
         assert isinstance(runtime.budget, Budget)
         assert runtime.budget.turns == 0
         assert runtime.budget.total_cost == 0.0
+
+
+class TestMcpWiring:
+    def test_no_mcp_servers_configured_no_manager_built(self) -> None:
+        config = load_config(VALID_AGENT)
+        with patch("agent_harness.runtime.McpManager") as mock_manager_cls:
+            runtime = prepare_runtime(
+                config,
+                permission_prompt_fn=lambda _tc: PermissionDecision.deny(),
+                show_output=False,
+                trace_enabled=False,
+            )
+        mock_manager_cls.assert_not_called()
+        assert runtime.mcp_manager is None
+
+    def test_mcp_servers_configured_manager_started_and_tools_merged(self) -> None:
+        config = load_config(WITH_MCP_SERVERS)
+        with patch("agent_harness.runtime.McpManager") as mock_manager_cls:
+            mock_manager = mock_manager_cls.return_value
+            mcp_tool = {"server": "filesystem", "name": "mcp_read", "description": "reads a file", "input_schema": {}}
+            mock_manager.list_tools.return_value = [mcp_tool]
+            runtime = prepare_runtime(
+                config,
+                permission_prompt_fn=lambda _tc: PermissionDecision.deny(),
+                show_output=False,
+                trace_enabled=False,
+            )
+
+        mock_manager_cls.assert_called_once()
+        mock_manager.start.assert_called_once()
+        assert runtime.mcp_manager is mock_manager
+        assert "mcp_read" in runtime.tool_registry
+        schema_names = [s["name"] for s in runtime.tool_schemas]
+        assert "mcp_read" in schema_names
+
+    def test_mcp_tool_calls_go_through_manager(self) -> None:
+        config = load_config(WITH_MCP_SERVERS)
+        with patch("agent_harness.runtime.McpManager") as mock_manager_cls:
+            mock_manager = mock_manager_cls.return_value
+            mcp_tool = {"server": "filesystem", "name": "mcp_read", "description": "reads a file", "input_schema": {}}
+            mock_manager.list_tools.return_value = [mcp_tool]
+            mock_manager.call_tool.return_value = "file contents"
+            runtime = prepare_runtime(
+                config,
+                permission_prompt_fn=lambda _tc: PermissionDecision.deny(),
+                show_output=False,
+                trace_enabled=False,
+            )
+            result = runtime.tool_registry["mcp_read"](path="a.txt")
+        assert result == "file contents"
+        mock_manager.call_tool.assert_called_once_with("filesystem", "mcp_read", {"path": "a.txt"})
+
+    def test_mcp_tool_name_collision_with_builtin_is_skipped(self) -> None:
+        config = load_config(WITH_MCP_SERVERS)  # already has "read_file" as a builtin tool
+        with patch("agent_harness.runtime.McpManager") as mock_manager_cls:
+            mock_manager = mock_manager_cls.return_value
+            colliding_tool = {"server": "filesystem", "name": "read_file", "description": "collides"}
+            mock_manager.list_tools.return_value = [{**colliding_tool, "input_schema": {}}]
+            runtime = prepare_runtime(
+                config,
+                permission_prompt_fn=lambda _tc: PermissionDecision.deny(),
+                show_output=False,
+                trace_enabled=False,
+            )
+        # The builtin read_file wins — not overwritten by the MCP tool of the same name.
+        from agent_harness.tools import read_file
+
+        assert runtime.tool_registry["read_file"] is read_file
+
+    def test_mcp_tool_not_exposed_by_agent_is_not_skipped(self) -> None:
+        """A built-in tool that exists but isn't in this agent's `tools:` list doesn't block MCP.
+
+        WITH_MCP_SERVERS only exposes "read_file" — `write_file` is a real
+        built-in but this agent never opted into it, so there's nothing
+        actually competing for that name from the model's point of view.
+        """
+        config = load_config(WITH_MCP_SERVERS)
+        with patch("agent_harness.runtime.McpManager") as mock_manager_cls:
+            mock_manager = mock_manager_cls.return_value
+            mcp_write = {"server": "filesystem", "name": "write_file", "description": "mcp write", "input_schema": {}}
+            mock_manager.list_tools.return_value = [mcp_write]
+            mock_manager.call_tool.return_value = "written"
+            runtime = prepare_runtime(
+                config,
+                permission_prompt_fn=lambda _tc: PermissionDecision.deny(),
+                show_output=False,
+                trace_enabled=False,
+            )
+        assert "write_file" in [s["name"] for s in runtime.tool_schemas]
+        result = runtime.tool_registry["write_file"](path="a.txt", content="hi")
+        assert result == "written"
+        mock_manager.call_tool.assert_called_once_with("filesystem", "write_file", {"path": "a.txt", "content": "hi"})
+
+    def test_two_mcp_servers_offering_same_tool_name_second_is_skipped(self) -> None:
+        config = load_config(WITH_MCP_SERVERS)
+        with patch("agent_harness.runtime.McpManager") as mock_manager_cls:
+            mock_manager = mock_manager_cls.return_value
+            first = {"server": "server_a", "name": "shared_tool", "description": "from a", "input_schema": {}}
+            second = {"server": "server_b", "name": "shared_tool", "description": "from b", "input_schema": {}}
+            mock_manager.list_tools.return_value = [first, second]
+            runtime = prepare_runtime(
+                config,
+                permission_prompt_fn=lambda _tc: PermissionDecision.deny(),
+                show_output=False,
+                trace_enabled=False,
+            )
+        schema_names = [s["name"] for s in runtime.tool_schemas]
+        assert schema_names.count("shared_tool") == 1
+        runtime.tool_registry["shared_tool"](x=1)
+        mock_manager.call_tool.assert_called_once_with("server_a", "shared_tool", {"x": 1})
+
+    def test_finalize_closes_mcp_manager_when_present(self) -> None:
+        config = load_config(WITH_MCP_SERVERS)
+        with patch("agent_harness.runtime.McpManager") as mock_manager_cls:
+            mock_manager = mock_manager_cls.return_value
+            mock_manager.list_tools.return_value = []
+            runtime = prepare_runtime(
+                config,
+                permission_prompt_fn=lambda _tc: PermissionDecision.deny(),
+                show_output=False,
+                trace_enabled=False,
+            )
+        runtime.finalize()
+        mock_manager.close.assert_called_once()
+
+    def test_finalize_no_error_when_no_mcp_manager(self) -> None:
+        config = load_config(VALID_AGENT)
+        runtime = prepare_runtime(
+            config,
+            permission_prompt_fn=lambda _tc: PermissionDecision.deny(),
+            show_output=False,
+            trace_enabled=False,
+        )
+        runtime.finalize()  # should not raise

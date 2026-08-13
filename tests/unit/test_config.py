@@ -7,6 +7,7 @@ from agent_harness.config import load
 VALID = "tests/data/valid_agent"
 NO_INSTRUCTIONS = "tests/data/invalid_agent_no_instructions"
 STREAMING = "tests/data/streaming_agent"
+WITH_MCP_SERVERS = "tests/data/agent_with_mcp_servers"
 
 
 class TestLoadValid:
@@ -51,6 +52,21 @@ class TestLoadValid:
         assert cfg.stream is True
         assert cfg.show_thinking is True
         assert cfg.provider_kwargs["thinking"] == {"budget_tokens": 2000}
+
+    def test_mcp_servers_defaults_empty(self) -> None:
+        cfg = load(VALID)
+        assert cfg.mcp_servers == []
+
+    def test_loads_mcp_servers(self) -> None:
+        cfg = load(WITH_MCP_SERVERS)
+        assert cfg.mcp_servers == [
+            {
+                "name": "filesystem",
+                "command": "npx",
+                "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+                "env": {"SOME_VAR": "1"},
+            },
+        ]
 
 
 class TestLoadInvalid:
