@@ -20,12 +20,23 @@ class ToolCall:
 
 
 @dataclass
+class Attachment:
+    """Model-native binary content to show the LLM (image or PDF)."""
+
+    kind: str  # "image" | "document"
+    media_type: str
+    data: str  # base64-encoded bytes
+    filename: str | None = None
+
+
+@dataclass
 class ToolResult:
     """The result of executing a tool call."""
 
     tool_call_id: str
     output: str | None = None
     error: str | None = None
+    attachment: Attachment | None = None
 
 
 @dataclass

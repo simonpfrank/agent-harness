@@ -1,30 +1,33 @@
 # Roadmap / Todo
 
-Durable list of things we've identified but haven't done yet. One section per item, dated when added. Add rather than edit — keep the history.
+Durable list of things we've identified but haven't done yet. One section per item, dated when added. Add rather than edit — keep the history, **except** the Priority Order list directly below, which is a living summary expected to be freely reordered/pruned each session, not append-only.
 
 When an item ships, move it to the **Done** section at the bottom with a commit reference and the date.
 
 ---
 
-## Near-term Improvements
+## Priority Order
 
-### Investigate o4-mini run-1 abort (added 2026-04-15)
+Ranked list of everything currently committed to build (drawn from `Near-term Improvements` and `Plausible Future Capabilities` below — `Ideas`/`Scoped out`/`Rejected` stay unranked, not commitments). Ranking logic: quick wins first, then dependency order within a track. See each item's own detail section for the *why*.
 
-**What:** On the first of 5 H1p3 runs on `o4-mini` (commit `49e0799` era), the agent completed tool calls through turn 6/10 and then stopped with a `tool_result` as the last trace event — no terminal assistant message, no `write_file`, no output JSON. Subprocess exited 1 silently. Runs 2–5 on the same config succeeded (2× 11/11, 1× 10/11, 1× 9/11).
+**Track A — Agent capability/correctness** (no dependency on Track B; sequenced first per 2026-08-15 discussion — don't scale exposure to a still-unverified core before fixing the core):
+1. Verified task completion
+2. Adaptive re-planning
 
-**Why:** If o4-mini is going to be a real option for this task it needs to be reliable. A ~20% silent-abort rate is not acceptable.
+**Track B — Interface/access expansion** (multi-device, multi-task future — Echo/phone/Reachy, not just CLI):
+3. Concurrency-safety for per-agent-dir state — cheap, not actually gated on the rest of this track, can go anytime
+4. Permission/approval UX for no-terminal contexts — also covers plan-approval's (`_plan_prompt`) identical fragility
+5. API / async boundary (thin sync/threaded wrapper — not an asyncio core rewrite)
 
-**Work:**
-1. Capture the exact API response that led to the tool_result-as-terminal state. Might be a `length` finish reason, an empty content field, or the react loop not handling a specific stop_reason shape.
-2. Check `agent_harness/loops/react.py` for how it terminates — does it require an assistant message with no tool_calls, or will it exit on other shapes?
-3. Add a regression test.
+**Track C — Single-task execution speed/quality** (separate from A and B — not about interfaces, about how well one task executes; soft-depends on Track B #4 only if approval-gated tools are involved):
+6. Parallel tool-call execution within a turn — has a concrete driving case (a research agent firing multiple fetches per turn)
+7. Parallel sub-agent fan-out — still no concrete driver, stays deferred
 
-**Note (2026-08-10):** o-series (o1/o3/o4) models, including o4-mini, are
-now deliberately and completely unsupported by this framework (see
-`docs/Progress_Tracker.md`, model-registry consolidation) — this item is
-moot and can be dropped rather than investigated further.
+**Deprioritized, no pressing need (2026-08-15):** CLI REPL single-keypress prompts, CLI REPL `#` type-ahead tool invocation — left scoped below for whenever a real need surfaces. `!` prefix for inline shell stays as an optional quick win, not urgent.
 
 ---
+
+## Near-term Improvements
 
 ### CLI REPL: single-keypress prompt responses, no Enter required (added 2026-08-10)
 
@@ -41,6 +44,8 @@ test suite and manual verification workflow, so raw-tty reading can't be
 the only path. Also changes how `_permission_prompt`/`_domain_prompt`
 get unit-tested (currently mocks `_console.input` directly). Worth
 planning properly before implementing, not a quick patch.
+
+**Status note (2026-08-15):** deprioritized — no pressing need, letter+Enter is fine for now. Left scoped here for whenever a real driver surfaces.
 
 ---
 
@@ -103,24 +108,111 @@ bundled with) the no-Enter-keypress item for its live-filtering half;
 the argument-prompting design above needs its own thought regardless of
 which input mechanism is chosen.
 
+**Status note (2026-08-15):** deprioritized — this was speculative ("being creative"), not a driven need. Left scoped here for whenever a real requirement surfaces.
+
 ---
 
 ## Plausible Future Capabilities
 
-**Build order (decided 2026-08-13, updated 2026-08-13 after MCP shipped):**
+**Superseded by the `Priority Order` section at the top of this file (2026-08-15)** — the "build order" note below is kept as historical record of the sequencing decisions made along the way, not the current authoritative order.
+
+**Build order (decided 2026-08-13, updated 2026-08-15 after multimodal shipped):**
 1. ~~Step-level evidence for evals~~ — **delayed** before being designed;
    see its entry below for why (same "no real driving case yet" call as
    prompt caching).
 2. ~~MCP client support~~ — **shipped 2026-08-13**, see Done below.
-3. **Next up:** Parallel sub-agent fan-out — real value but pushes
-   concurrency into a deliberately synchronous core; wait until there's a
-   concrete driving use case (none in this repo today — `orchestrator`
-   calls `run_agent` serially) and until evals/MCP give something worth
-   measuring and fanning out.
-4. Image handling / multimodal — biggest lift on the list; build when
-   something concrete needs vision, not speculatively.
+3. ~~Image handling / multimodal~~ — **shipped 2026-08-15** (built ahead of
+   its original slot — decided 2026-08-13 to skip Parallel sub-agent
+   fan-out and treat async/concurrency as its own future phase rather than
+   a single-item priority, which moved multimodal up). See "Multimodal
+   file handling" in Done below.
+4. **Deferred to an "async phase"**, not scheduled as an individual item:
+   Parallel sub-agent fan-out — real value but pushes concurrency into a
+   deliberately synchronous core; still no concrete driving use case in
+   this repo (`orchestrator` calls `run_agent` serially). Revisit once
+   there's a real reason to take on concurrency as a project, not as a
+   one-off feature.
 
-Not part of the sequence: **API/async boundary** is a standing design constraint ("if an API is ever added, keep async at the boundary"), not a buildable task — it activates only if something else creates a reason for an external API. **Lazy tool schema loading** doesn't clear this file's own benefit-vs-complexity bar (see its entry below) and isn't scheduled.
+Not part of the sequence: **API/async boundary** is a standing design constraint ("if an API is ever added, keep async at the boundary"), not a buildable task — it activates only if something else creates a reason for an external API; conceptually the same "async phase" bucket as parallel fan-out above. **Lazy tool schema loading** doesn't clear this file's own benefit-vs-complexity bar (see its entry below) and isn't scheduled.
+
+### Verified task completion (added 2026-08-15)
+
+**Status:** Active roadmap design — Priority Order #1
+
+**What:** None of the self-terminating loops verify their own completion
+against reality. `reflection.py`/`eval_optimize.py` stop on the model's
+own critique containing `DONE` or a self-reported `SCORE: N/10`;
+`ralph.py` stops when the model's response contains the literal word
+`DONE` (`_DONE_MARKER`). All three trust the model's self-report; none
+run a test suite, check output against a spec, or otherwise verify
+programmatically.
+
+**Why:** Raised originally in "Refining the reflection loop" and "What a
+decent coding agent would need" (Ideas, below) — promoted here 2026-08-15
+because scaling exposure (more interfaces, more concurrent agents) on top
+of an unverified completion signal compounds the risk rather than just
+repeating it.
+
+**Scope in roadmap terms:** not designed yet. Possible directions already
+captured in "Refining the reflection loop" (Ideas): structured pass/fail
+critique output instead of keyword matching, or letting the critique
+phase reference programmatic verification (borrowing `eval/`'s grader
+concept — gate vs signal — rather than reinventing verification per loop).
+
+### Adaptive re-planning (added 2026-08-15)
+
+**Status:** Active roadmap design — Priority Order #2
+
+**What:** `plan_execute.py` plans once, does at most 2 critique/refine
+rounds on the plan *text* before execution starts, then commits —
+nothing re-plans mid-execution if a step reveals the original plan's
+premise was wrong.
+
+**Why:** Promoted from "What a decent coding agent would need" (Ideas,
+below) — a static plan is a real ceiling for open-ended tasks where
+surprises are the norm, and this is core single-agent capability,
+independent of any interface/concurrency work.
+
+**Scope in roadmap terms:** not designed yet.
+
+### Concurrency-safety for per-agent-dir state (added 2026-08-15)
+
+**Status:** Active roadmap design — Priority Order #3
+
+**What:** Two concurrent runs of the *same* agent (e.g. asking the same
+home-assistant agent something from two rooms at once) can race today:
+`runtime.py::prepare_runtime` clears `agent_dir/tmp/` at the start of
+every run, and memory/session file writes aren't lock-protected.
+
+**Why:** Real prerequisite for any multi-interface access story (API,
+voice, Reachy) to work reliably — independent of whichever concurrency
+model (threads, processes, eventually async) ends up serving requests.
+Ties back to an earlier, since-shelved discussion about giving each
+session its own `tmp/` subfolder, bailed on at the time because session
+ids are optional — worth revisiting now that there's a concrete driver.
+
+**Scope in roadmap terms:** not designed yet — likely touches
+`runtime.py::prepare_runtime`, `memory.py`, `session.py`.
+
+### Permission/approval UX for no-terminal contexts (added 2026-08-15)
+
+**Status:** Active roadmap design — Priority Order #4
+
+**What:** `_permission_prompt`/`_domain_prompt`/`_plan_prompt` (`cli.py`)
+are all synchronous prompts that assume a human at a terminal. Any
+non-CLI interface (API, voice, Reachy) has no way to ask "may I do this?"
+and get an answer — and this isn't just an API-layer gap: it already
+applies to `plan_execute`'s existing plan-approval gate the same way it
+would to a new interface.
+
+**Why:** A hard blocker for the API/interface track, and made concretely
+worse (not just theoretically) by parallel tool-call execution — two
+tools needing approval in the same turn would race for one terminal
+prompt today.
+
+**Scope in roadmap terms:** not designed yet. Needs a real design
+decision (push-notify-and-wait, network-scoped tool allowlists that never
+need asking, something else) before or alongside API-boundary work.
 
 ### Parallel sub-agent fan-out (added 2026-04-16)
 
@@ -134,6 +226,11 @@ Not part of the sequence: **API/async boundary** is a standing design constraint
 
 **Deep-dive design:** `docs/streaming-plan.md`
 
+**Note (2026-08-15):** reaffirmed as deferred — Priority Order #7, same
+track as parallel tool-call execution (Track C, below/in the
+Scoped-out-of-MCP backlog), separate from the interface-expansion track
+(Priority Order #3–5). Still no concrete driver.
+
 ### API / async boundary (added 2026-04-16)
 
 **Status:** Active roadmap design
@@ -143,6 +240,25 @@ Not part of the sequence: **API/async boundary** is a standing design constraint
 **Why:** Async is a means to an end, not a feature. The main value would be serving external consumers cleanly, not making the core more complex.
 
 **Scope in roadmap terms:** API later, boundary-first async only, sync core by default.
+
+**Note (2026-08-15):** tightened after discussion — "async at the
+boundary" means thread/process-per-request, not asyncio. No asyncio
+anywhere (boundary or core) is justified without a real high-fan-out
+driver; parallel tool-call execution and parallel sub-agent fan-out are
+the two things that would actually justify it if either gets built at
+real scale. Priority Order #5 — depends on #3 and #4 (concurrency-safety,
+permission UX) being solved first, since a service layer without either
+is unsafe to expose beyond localhost.
+
+**Note (2026-08-15), trigger-driven vs. request-response:** not every
+future caller is a human waiting live on the other end. A home-assistant
+use case eventually wants event-driven runs too — a sensor fires, an
+email arrives, a cron time hits, and the agent runs without anyone asking
+in the moment. Not a 4th interface — still goes through this same API (or
+the existing scriptable command-line mode, for local cron) — but a
+different call shape (fire-and-record-result vs. someone actively
+waiting), worth designing for from the start rather than assuming every
+request has an impatient human on the other end.
 
 **Deep-dive design:** `docs/streaming-plan.md`
 
@@ -256,6 +372,12 @@ provider-specific content-block construction on both providers. Already
 flagged as the "genuinely major hassle" item during the RAG conversation,
 as distinct from the cheap CLI-image-display piece.
 
+**Superseded, shipped 2026-08-15:** requirements broadened from "images"
+to "images, documents, and general file input/output" and fully specced
+in `docs/multimodal-plan.md`, then built end to end. See "Multimodal
+file handling" in Done below for the summary. This entry stays for
+history; `docs/multimodal-plan.md` has the full PRD + spec.
+
 ### Budget-verification tooling + agent_budgets (added 2026-08-06, shipped 2026-08-06)
 
 **What:** Four new tools — `edit_file` (targeted search-replace),
@@ -318,6 +440,11 @@ change (`loops/react.py`/`loops/common.py`), not an MCP-client concern —
 built-in tools would benefit exactly as much as MCP ones, so it belongs in
 its own item, not bolted onto this one.
 
+**Note (2026-08-15):** Priority Order #6 — has a concrete driving case (a
+research agent firing multiple fetches per turn) and soft-depends on
+"Permission/approval UX for no-terminal contexts" (Plausible Future
+Capabilities) only if approval-gated tools are involved.
+
 ### Run-abort on unsurvivable tool failure
 
 MCP client support ships a narrower version of this: `McpManager` tracks
@@ -356,6 +483,9 @@ Possible directions, none decided:
   Worth asking whether reflection's critique phase could borrow that
   concept rather than reinventing verification twice.
 
+**Promoted (2026-08-15):** see "Verified task completion" in Plausible
+Future Capabilities — broadened beyond just `reflection.py` to cover
+`ralph.py`/`eval_optimize.py`'s same self-report weakness.
 
 ### Framework comparison
 
@@ -465,14 +595,16 @@ fresh-context retry, which has no notion of sub-tasks at all.
 **Planning — partially exists.** `loops/plan_execute.py` already does
 plan-once-then-execute-each-step. What it doesn't do: adaptive re-planning
 when a step reveals something the original plan didn't account for — it's a
-static plan, not a living one.
+static plan, not a living one. **Promoted (2026-08-15):** see "Adaptive
+re-planning" in Plausible Future Capabilities.
 
 **Completion detection — real weakness, checked directly.** `ralph.py`'s
 "done" signal is the model saying the literal word `DONE` in its response
 (`_DONE_MARKER`) — a self-report, not a verification. The loop never runs
 the test suite itself and checks the result; it just believes the model.
 Same category of problem as the JSON-fencing discussion — the loop has no
-way to programmatically check its own work.
+way to programmatically check its own work. **Promoted (2026-08-15):** see
+"Verified task completion" in Plausible Future Capabilities.
 
 **Connects to RAG work already planned:** semantic search over a codebase
 (not just docs) is the same infrastructure as `docs/rag-plan.md`, different
@@ -636,6 +768,22 @@ New `AgentConfig.mcp_servers` (`config.yaml`'s `mcp_servers:` list, same pattern
 **Package choice revised mid-planning, not the first instinct:** started with the official `mcp` SDK as the safe default. User's first reason for FastMCP ("we'll use FastAPI later, so synergy") didn't survive a direct check — FastMCP is built by Jeremiah Lowin/PrefectHQ, no relation to FastAPI's author — said so rather than going along with it. The real deciding factor, raised by the user: they intend to build an MCP *server* at some future point, and FastMCP's own docs confirm the slim client and full packages "use the same importable package... application code remains identical regardless of the chosen installation method" — so starting on `fastmcp-slim[client]` now makes that later transition an install-only change. Turned out heavier than hoped in practice (`[client]` transitively pulls in the full `mcp` SDK plus `starlette`/`uvicorn`/`authlib`/`keyring`/`cryptography` — auth/HTTP machinery for a remote-transport path this build doesn't use) — flagged transparently, didn't change the decision, since the deciding argument was migration cost, not dependency weight.
 
 Verified live against the real reference `@modelcontextprotocol/server-filesystem` (via `npx`) at every level: unit tests mock the FastMCP boundary; `tests/integration/test_mcp_real.py` runs the actual stdio server with zero mocks (skips cleanly if `npx` is absent); a manual run of a throwaway agent against the live Anthropic API showed the model correctly discovering and calling the MCP-provided `read_text_file` tool, getting real file content back, and answering correctly — with the built-in-name-collision skip (`read_file`/`write_file`/`edit_file`/`list_directory`) firing exactly as designed in the same run. Confirmed no orphaned `npx`/node processes survive after the harness process exits.
+
+### Multimodal file handling (added 2026-08-06 as "Image handling", broadened and resolved 2026-08-15)
+
+Agents can now genuinely see images and PDFs, and tools can hand back freshly-generated binary content — full requirements/PRD in `docs/multimodal-plan.md`, this entry is the shipped summary. Two capabilities: (A) new built-in tools `view_image(path)`/`view_document(path)` attach a real vision/document content block to the *next* message, not just a text description; (B) any tool can embed base64+filename in its ordinary string output (`attachments.py::wrap_binary_output`) and the harness detects, decodes, guardrails, and saves it, replacing the envelope with a short text reference before it ever enters history or the CLI display.
+
+**Architecture decision, validated by a Plan agent re-reading every touched file:** `ToolResult` gets one new field, `attachment: Attachment | None` — `tool_registry: dict[str, Callable[..., str]]` stays completely untouched, every tool (built-in/custom/MCP) still just returns `str`. Verified both OpenAI translation paths (Chat Completions and Responses) are string-only for tool output, so an attachment becomes a **separate synthetic message following the tool result** on all three translation functions (Anthropic + 2×OpenAI) — uniform, not relying on an unverified Anthropic-specific nested-content quirk. `view_image`/`view_document` are matched by **function identity, not name** in `execute_tool`, closing an edge case where an MCP server exposing its own same-named tool could otherwise get misattributed.
+
+**Two real bugs the validation pass caught before they shipped, not discovered later:**
+1. The obvious guardrail reuse (`hooks.py`'s path-traversal helper) would have been a security hole — it deliberately exempts absolute paths for its actual job (explicit tool arguments), but reused for a filename pulled from untrusted tool output, `Path("/agent/tmp") / "/etc/passwd"` silently evaluates to `/etc/passwd` in Python. Mechanism B does its own stricter basename-only check instead.
+2. The policy of "let the API reject unsupported content, don't pre-validate against a stale compatibility table" (same lesson as the `COST_TABLE`/o4-mini drift bug) depended on that rejection being a normal visible error — traced the real path and found any `BadRequestError` today crashes the whole process with a raw traceback, no try/except anywhere on the chain. Fixed in `providers/retry.py` (wraps as `RuntimeError`) and `cli.py` (catches it at both the single-shot and REPL call sites) — a real, general fix, not multimodal-specific.
+
+**Token/context handling, two separate mechanisms:** mechanism B's extraction is synchronous at tool-call time, so raw base64 never enters `Message` history at all. Mechanism A's viewed image *does* need to exist as a real content block for the model to see it, so `attachments.py::prune_attachments` keeps only the most-recently-viewed attachment "live" in what's sent to the model (mirrors `loops/react.py::_with_budget_note`'s disposable-overlay pattern exactly — canonical persisted history keeps every attachment, only the API-bound copy is pruned). Wired into both `react.py` and `rewoo.py` — the latter has its own independent tool-execution path that doesn't delegate to `react_run`, found by the validation pass, would otherwise have silently skipped pruning.
+
+**Storage:** new `agent_dir/tmp/`, cleared once at the start of each run (mirrors `eval/runner.py::_clear_memory`'s existing "fresh state" pattern) — deliberately not session-persisted (`session.py` untouched: a base64 blob surviving into `session.json` would already point at a deleted file on resume, since `tmp/` clears every run).
+
+Verified live, zero mocks, real files, real API calls throughout: a real striped PNG (stdlib-only PNG encoder, no new dependency) viewed via `view_image` against live Anthropic — the model's exact color-and-order description proves genuine visual perception, not a guess (an earlier attempt with a too-small 40×30px test image got the colors wrong even with correctly-attached real image data, confirmed via an isolated raw-API call — a test-image-sizing issue, not a harness bug, fixed by using a larger image); two-image pruning confirmed against a live run (canonical history keeps both, the pruned overlay keeps one); mechanism B confirmed end-to-end via `execute_code` generating real PNG bytes in-process, saved correctly, zero base64 in captured output; graceful degradation confirmed against a real local OpenAI-compatible LM Studio server — both the deterministic Chat-Completions-has-no-PDF-type note and a genuine live provider rejection (`RuntimeError`, not a crash) verified for real.
 
 ---
 

@@ -13,6 +13,7 @@ htmlcov/
 **/logs/
 **/sessions/
 **/memory/
+**/tmp/
 **/.allowed_domains.yaml
 **/.permissions.yaml
 docs/research/

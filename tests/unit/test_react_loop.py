@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 from agent_harness.loops.react import run
 from agent_harness.types import (
     AgentConfig,
+    Attachment,
     LoopCallbacks,
     Message,
     Response,
@@ -141,6 +142,64 @@ class TestBudgetStatusInjection:
 
         call_messages = chat_fn.call_args[0][0]
         assert call_messages is messages
+
+
+class TestAttachmentPruning:
+    def test_only_most_recent_attachment_stays_live(self) -> None:
+        tc1 = ToolCall(id="tc_1", name="view_image", arguments={"path": "a.png"})
+        tc2 = ToolCall(id="tc_2", name="view_image", arguments={"path": "b.png"})
+        attachment1 = Attachment(kind="image", media_type="image/png", data="AAAA", filename="a.png")
+        attachment2 = Attachment(kind="image", media_type="image/png", data="BBBB", filename="b.png")
+        responses = [
+            _response("viewing a", stop_reason="tool_use", tool_calls=[tc1]),
+            _response("viewing b", stop_reason="tool_use", tool_calls=[tc2]),
+            _response("done"),
+        ]
+        chat_fn = MagicMock(side_effect=responses)
+        on_tool_call = MagicMock(
+            side_effect=[
+                ToolResult(tool_call_id="tc_1", output="Viewing a.png", attachment=attachment1),
+                ToolResult(tool_call_id="tc_2", output="Viewing b.png", attachment=attachment2),
+            ]
+        )
+        messages = [Message(role="user", content="look at these")]
+        cb = LoopCallbacks(on_tool_call=on_tool_call)
+
+        run(chat_fn, messages, [], _config(), callbacks=cb)
+
+        final_call_messages = chat_fn.call_args_list[-1][0][0]
+        attachment_bearing = [
+            m for m in final_call_messages if m.tool_result is not None and m.tool_result.attachment is not None
+        ]
+        assert len(attachment_bearing) == 1
+        assert attachment_bearing[0].tool_result.attachment.filename == "b.png"
+
+    def test_canonical_messages_keep_all_attachments(self) -> None:
+        tc1 = ToolCall(id="tc_1", name="view_image", arguments={"path": "a.png"})
+        tc2 = ToolCall(id="tc_2", name="view_image", arguments={"path": "b.png"})
+        attachment1 = Attachment(kind="image", media_type="image/png", data="AAAA", filename="a.png")
+        attachment2 = Attachment(kind="image", media_type="image/png", data="BBBB", filename="b.png")
+        responses = [
+            _response("viewing a", stop_reason="tool_use", tool_calls=[tc1]),
+            _response("viewing b", stop_reason="tool_use", tool_calls=[tc2]),
+            _response("done"),
+        ]
+        chat_fn = MagicMock(side_effect=responses)
+        on_tool_call = MagicMock(
+            side_effect=[
+                ToolResult(tool_call_id="tc_1", output="Viewing a.png", attachment=attachment1),
+                ToolResult(tool_call_id="tc_2", output="Viewing b.png", attachment=attachment2),
+            ]
+        )
+        messages = [Message(role="user", content="look at these")]
+        cb = LoopCallbacks(on_tool_call=on_tool_call)
+
+        run(chat_fn, messages, [], _config(), callbacks=cb)
+
+        attachment_bearing = [
+            m for m in messages if m.tool_result is not None and m.tool_result.attachment is not None
+        ]
+        assert len(attachment_bearing) == 2
 
 
 class TestRunStreaming:

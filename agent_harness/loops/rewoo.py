@@ -6,6 +6,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
+from agent_harness.attachments import prune_attachments
 from agent_harness.tools import execute_tool
 from agent_harness.types import AgentConfig, LoopCallbacks, Message, Response, ToolCall
 
@@ -65,7 +66,9 @@ def run(
             messages.append(Message(role="tool", tool_result=result))
 
     # Phase 3: Solve — LLM sees all results, no tools
-    solve_response = chat_fn(messages, [], model=config.model, stream=config.stream, **config.provider_kwargs)
+    solve_response = chat_fn(
+        prune_attachments(messages), [], model=config.model, stream=config.stream, **config.provider_kwargs,
+    )
     messages.append(solve_response.message)
     if cb.on_response:
         cb.on_response(solve_response)

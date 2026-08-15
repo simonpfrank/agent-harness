@@ -10,7 +10,7 @@ from agent_harness.providers.anthropic import (
     _to_response,
     chat,
 )
-from agent_harness.types import Message, ToolCall, ToolResult
+from agent_harness.types import Attachment, Message, ToolCall, ToolResult
 
 
 class TestToAnthropicMessages:
@@ -48,6 +48,33 @@ class TestToAnthropicMessages:
         assert result[0]["role"] == "user"
         assert result[0]["content"][0]["type"] == "tool_result"
         assert result[0]["content"][0]["tool_use_id"] == "tc_1"
+
+    def test_tool_result_without_attachment_has_no_extra_message(self) -> None:
+        tr = ToolResult(tool_call_id="tc_1", output="file data")
+        msgs = [Message(role="tool", tool_result=tr)]
+        _, result = _to_anthropic_messages(msgs)
+        assert len(result) == 1
+
+    def test_tool_result_with_image_attachment_emits_separate_message(self) -> None:
+        attachment = Attachment(kind="image", media_type="image/png", data="abc123", filename="chart.png")
+        tr = ToolResult(tool_call_id="tc_1", output="Viewing chart.png", attachment=attachment)
+        msgs = [Message(role="tool", tool_result=tr)]
+        _, result = _to_anthropic_messages(msgs)
+        assert len(result) == 2
+        assert result[0]["content"][0]["type"] == "tool_result"
+        assert result[1] == {
+            "role": "user",
+            "content": [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "abc123"}}],
+        }
+
+    def test_tool_result_with_document_attachment_emits_document_block(self) -> None:
+        attachment = Attachment(kind="document", media_type="application/pdf", data="pdfdata", filename="r.pdf")
+        tr = ToolResult(tool_call_id="tc_1", output="Viewing r.pdf", attachment=attachment)
+        msgs = [Message(role="tool", tool_result=tr)]
+        _, result = _to_anthropic_messages(msgs)
+        assert len(result) == 2
+        assert result[1]["content"][0]["type"] == "document"
+        assert result[1]["content"][0]["source"]["media_type"] == "application/pdf"
 
     def test_assistant_with_thinking_blocks_prepended(self) -> None:
         tc = ToolCall(id="tc_1", name="read_file", arguments={"path": "foo"})

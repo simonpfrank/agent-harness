@@ -7,7 +7,7 @@ from typing import Any
 import anthropic
 
 from agent_harness.providers.retry import with_retry
-from agent_harness.types import Message, Response, ToolCall, Usage
+from agent_harness.types import Attachment, Message, Response, ToolCall, ToolResult, Usage
 
 _client: anthropic.Anthropic | None = None
 
@@ -18,6 +18,52 @@ def _get_client() -> anthropic.Anthropic:
     if _client is None:
         _client = anthropic.Anthropic()
     return _client
+
+
+def _attachment_content_block(attachment: Attachment) -> dict[str, Any]:
+    """Build the Anthropic content block for a viewed image/document.
+
+    Args:
+        attachment: The attachment to render.
+
+    Returns:
+        An `image` or `document` content block with base64 source data.
+    """
+    block_type = "document" if attachment.kind == "document" else "image"
+    return {
+        "type": block_type,
+        "source": {"type": "base64", "media_type": attachment.media_type, "data": attachment.data},
+    }
+
+
+def _append_tool_result(result: list[dict[str, Any]], tr: ToolResult) -> None:
+    """Append a tool result (and its attachment, if any) to the message list.
+
+    Merges into the previous message's content list if it's already a
+    pending tool_result batch (Anthropic groups consecutive tool results
+    into one user message). An attachment always lands in its own
+    following message, never inside the tool_result block itself.
+
+    Args:
+        result: API message list being built, mutated in place.
+        tr: The tool result to append.
+    """
+    tool_result_block: dict[str, Any] = {
+        "type": "tool_result",
+        "tool_use_id": tr.tool_call_id,
+        "content": tr.output if tr.output else (tr.error or ""),
+        "is_error": tr.error is not None,
+    }
+    if result and result[-1].get("role") == "user":
+        prev_content = result[-1].get("content", [])
+        if isinstance(prev_content, list) and prev_content and prev_content[0].get("type") == "tool_result":
+            prev_content.append(tool_result_block)
+            if tr.attachment is not None:
+                result.append({"role": "user", "content": [_attachment_content_block(tr.attachment)]})
+            return
+    result.append({"role": "user", "content": [tool_result_block]})
+    if tr.attachment is not None:
+        result.append({"role": "user", "content": [_attachment_content_block(tr.attachment)]})
 
 
 def _to_anthropic_messages(
@@ -40,20 +86,7 @@ def _to_anthropic_messages(
             continue
 
         if msg.role == "tool" and msg.tool_result is not None:
-            tr = msg.tool_result
-            tool_result_block: dict[str, Any] = {
-                "type": "tool_result",
-                "tool_use_id": tr.tool_call_id,
-                "content": tr.output if tr.output else (tr.error or ""),
-                "is_error": tr.error is not None,
-            }
-            # Merge consecutive tool results into one user message
-            if result and result[-1].get("role") == "user":
-                prev_content = result[-1].get("content", [])
-                if isinstance(prev_content, list) and prev_content and prev_content[0].get("type") == "tool_result":
-                    prev_content.append(tool_result_block)
-                    continue
-            result.append({"role": "user", "content": [tool_result_block]})
+            _append_tool_result(result, msg.tool_result)
             continue
 
         if msg.role == "assistant" and (msg.tool_calls or msg.thinking_blocks):

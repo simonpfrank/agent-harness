@@ -15,7 +15,7 @@ import openai
 
 from agent_harness.models import MODEL_REGISTRY
 from agent_harness.providers.retry import with_retry
-from agent_harness.types import Message, Response, ToolCall, Usage
+from agent_harness.types import Attachment, Message, Response, ToolCall, ToolResult, Usage
 
 _clients: dict[str, openai.OpenAI] = {}
 _EXCLUDED_MODEL_PREFIXES = ("o1", "o3", "o4")
@@ -77,6 +77,40 @@ def _response_endpoint_for_model(model: str, base_url: str | None = None) -> str
     return "responses"
 
 
+def _chat_completions_attachment_message(attachment: Attachment) -> dict[str, Any]:
+    """Build the follow-up message for a viewed image/document over Chat Completions.
+
+    Chat Completions has no document/file content type at all — a PDF
+    attachment becomes a short in-band text note instead of a raw
+    BadRequestError, since that incompatibility is known ahead of time,
+    not genuine model-capability variance.
+
+    Args:
+        attachment: The attachment to render.
+
+    Returns:
+        A synthetic user message to append after the tool result.
+    """
+    if attachment.kind == "document":
+        name = attachment.filename or "the document"
+        note = f"[Note: {name} is a PDF; this backend does not support document viewing over Chat Completions.]"
+        return {"role": "user", "content": note}
+    url = f"data:{attachment.media_type};base64,{attachment.data}"
+    return {"role": "user", "content": [{"type": "image_url", "image_url": {"url": url}}]}
+
+
+def _append_chat_completions_tool_result(result: list[dict[str, Any]], tr: ToolResult) -> None:
+    result.append(
+        {
+            "role": "tool",
+            "tool_call_id": tr.tool_call_id,
+            "content": tr.output if tr.output else (tr.error or ""),
+        },
+    )
+    if tr.attachment is not None:
+        result.append(_chat_completions_attachment_message(tr.attachment))
+
+
 def _to_openai_messages(messages: list[Message]) -> list[dict[str, Any]]:
     """Convert internal messages to Chat Completions format.
 
@@ -89,14 +123,7 @@ def _to_openai_messages(messages: list[Message]) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     for msg in messages:
         if msg.role == "tool" and msg.tool_result is not None:
-            tr = msg.tool_result
-            result.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": tr.tool_call_id,
-                    "content": tr.output if tr.output else (tr.error or ""),
-                },
-            )
+            _append_chat_completions_tool_result(result, msg.tool_result)
             continue
 
         if msg.role == "assistant" and msg.tool_calls:
@@ -124,6 +151,39 @@ def _to_openai_messages(messages: list[Message]) -> list[dict[str, Any]]:
     return result
 
 
+def _responses_attachment_item(attachment: Attachment) -> dict[str, Any]:
+    """Build the follow-up input item for a viewed image/document over the Responses API.
+
+    Args:
+        attachment: The attachment to render.
+
+    Returns:
+        A synthetic user input item to append after the function_call_output.
+    """
+    url = f"data:{attachment.media_type};base64,{attachment.data}"
+    if attachment.kind == "document":
+        content: dict[str, Any] = {
+            "type": "input_file",
+            "file_data": url,
+            "filename": attachment.filename or "document.pdf",
+        }
+    else:
+        content = {"type": "input_image", "image_url": url}
+    return {"role": "user", "content": [content]}
+
+
+def _append_responses_tool_result(input_items: list[dict[str, Any]], tr: ToolResult) -> None:
+    input_items.append(
+        {
+            "type": "function_call_output",
+            "call_id": tr.tool_call_id,
+            "output": tr.output if tr.output else (tr.error or ""),
+        },
+    )
+    if tr.attachment is not None:
+        input_items.append(_responses_attachment_item(tr.attachment))
+
+
 def _to_openai_input(
     messages: list[Message],
 ) -> tuple[str | None, list[dict[str, Any]]]:
@@ -145,14 +205,7 @@ def _to_openai_input(
             continue
 
         if msg.role == "tool" and msg.tool_result is not None:
-            tr = msg.tool_result
-            input_items.append(
-                {
-                    "type": "function_call_output",
-                    "call_id": tr.tool_call_id,
-                    "output": tr.output if tr.output else (tr.error or ""),
-                },
-            )
+            _append_responses_tool_result(input_items, msg.tool_result)
             continue
 
         if msg.role == "assistant" and msg.tool_calls:

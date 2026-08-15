@@ -64,7 +64,23 @@ def dangerous_command_blocker(tool_call: ToolCall) -> ToolCall | None:
     return tool_call
 
 
-def _escapes_workspace(raw_path: str, workspace_root: Path) -> bool:
+def escapes_workspace(raw_path: str, workspace_root: Path) -> bool:
+    """Check whether a relative path resolves outside workspace_root.
+
+    Absolute paths are never flagged here — an agent naming one explicitly
+    is an accepted, separately-permissioned choice for tool arguments like
+    `read_file(path=...)`. Not suitable for validating untrusted strings
+    pulled from tool output (e.g. a filename embedded in another tool's
+    return value) — an absolute right-hand side silently discards the
+    left side of a `Path` join, so this check would miss it entirely.
+
+    Args:
+        raw_path: Path string to check.
+        workspace_root: Base directory relative paths must stay within.
+
+    Returns:
+        True if a relative path resolves outside workspace_root.
+    """
     candidate = Path(raw_path)
     if candidate.is_absolute():
         return False
@@ -90,7 +106,7 @@ def path_traversal_detector(
     for name, value in tool_call.arguments.items():
         if name not in _PATH_ARGUMENT_NAMES:
             continue
-        if isinstance(value, str) and _escapes_workspace(value, root):
+        if isinstance(value, str) and escapes_workspace(value, root):
             logger.warning("Blocked path traversal in %s=%s", name, value)
             return None
     return tool_call

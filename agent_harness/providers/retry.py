@@ -44,8 +44,8 @@ def with_retry(
             raise RuntimeError(
                 f"{provider_name} API key invalid or not set — export {env_var}"
             ) from None
-        except bad_request_error:
-            raise
+        except bad_request_error as exc:
+            raise RuntimeError(f"{provider_name} rejected the request: {exc}") from exc
         except api_error as exc:
             if attempt < MAX_RETRIES - 1:
                 delay = BACKOFF_SECONDS[attempt]

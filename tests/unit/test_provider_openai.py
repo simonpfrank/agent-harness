@@ -13,7 +13,7 @@ from agent_harness.providers.openai_provider import (
     _to_response,
     chat,
 )
-from agent_harness.types import Message, ToolCall, ToolResult
+from agent_harness.types import Attachment, Message, ToolCall, ToolResult
 
 
 class TestToOpenaiMessages:
@@ -59,6 +59,33 @@ class TestToOpenaiMessages:
         result = _to_openai_messages(msgs)
         assert result[0]["content"] == "not found"
 
+    def test_tool_result_without_attachment_has_no_extra_message(self) -> None:
+        tr = ToolResult(tool_call_id="tc_1", output="file data")
+        msgs = [Message(role="tool", tool_result=tr)]
+        result = _to_openai_messages(msgs)
+        assert len(result) == 1
+
+    def test_tool_result_with_image_attachment_emits_image_url_message(self) -> None:
+        attachment = Attachment(kind="image", media_type="image/png", data="abc123", filename="chart.png")
+        tr = ToolResult(tool_call_id="tc_1", output="Viewing chart.png", attachment=attachment)
+        msgs = [Message(role="tool", tool_result=tr)]
+        result = _to_openai_messages(msgs)
+        assert len(result) == 2
+        assert result[1] == {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,abc123"}}],
+        }
+
+    def test_tool_result_with_document_attachment_emits_unsupported_note(self) -> None:
+        attachment = Attachment(kind="document", media_type="application/pdf", data="pdfdata", filename="r.pdf")
+        tr = ToolResult(tool_call_id="tc_1", output="Viewing r.pdf", attachment=attachment)
+        msgs = [Message(role="tool", tool_result=tr)]
+        result = _to_openai_messages(msgs)
+        assert len(result) == 2
+        assert result[1]["role"] == "user"
+        assert "r.pdf" in result[1]["content"]
+        assert "Chat Completions" in result[1]["content"]
+
 
 class TestToOpenaiInput:
     def test_converts_system_message_to_instructions(self) -> None:
@@ -91,6 +118,36 @@ class TestToOpenaiInput:
             "type": "function_call_output",
             "call_id": "call_1",
             "output": "contents",
+        }
+
+    def test_tool_result_without_attachment_has_no_extra_item(self) -> None:
+        tr = ToolResult(tool_call_id="tc_1", output="file data")
+        messages = [Message(role="tool", tool_result=tr)]
+        _, input_items = _to_openai_input(messages)
+        assert len(input_items) == 1
+
+    def test_tool_result_with_image_attachment_emits_input_image(self) -> None:
+        attachment = Attachment(kind="image", media_type="image/png", data="abc123", filename="chart.png")
+        tr = ToolResult(tool_call_id="tc_1", output="Viewing chart.png", attachment=attachment)
+        messages = [Message(role="tool", tool_result=tr)]
+        _, input_items = _to_openai_input(messages)
+        assert len(input_items) == 2
+        assert input_items[1] == {
+            "role": "user",
+            "content": [{"type": "input_image", "image_url": "data:image/png;base64,abc123"}],
+        }
+
+    def test_tool_result_with_document_attachment_emits_input_file(self) -> None:
+        attachment = Attachment(kind="document", media_type="application/pdf", data="pdfdata", filename="r.pdf")
+        tr = ToolResult(tool_call_id="tc_1", output="Viewing r.pdf", attachment=attachment)
+        messages = [Message(role="tool", tool_result=tr)]
+        _, input_items = _to_openai_input(messages)
+        assert len(input_items) == 2
+        assert input_items[1] == {
+            "role": "user",
+            "content": [
+                {"type": "input_file", "file_data": "data:application/pdf;base64,pdfdata", "filename": "r.pdf"},
+            ],
         }
 
 

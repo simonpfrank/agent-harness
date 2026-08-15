@@ -46,6 +46,8 @@ def _message_tokens(msg: Message) -> int:
         total += estimate_tokens(msg.content)
     if msg.tool_result and msg.tool_result.output:
         total += estimate_tokens(msg.tool_result.output)
+    if msg.tool_result and msg.tool_result.attachment:
+        total += estimate_tokens(msg.tool_result.attachment.data)
     return total + 4  # overhead per message
 
 

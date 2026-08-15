@@ -1,0 +1,8 @@
+name: test-multimodal-local
+provider: openai
+model: qwen/qwen3-4b-thinking-2507
+loop: react
+tools: [read_file, view_document]
+max_turns: 3
+provider_kwargs:
+  base_url: "http://localhost:1234/v1"

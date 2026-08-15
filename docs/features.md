@@ -36,10 +36,19 @@ enough time has passed — it's a snapshot, not a live view.
 - **Retry logic** (`providers/retry.py`) — shared across both providers.
   Exponential backoff (1s/2s/4s) on transient API errors, immediate failure
   with a clear message on auth errors, no retry on bad-request errors.
-- **Cost tracking** (`budget.py`) — per-model cost table (input/output
-  rates) for every supported Anthropic and OpenAI model. `Budget` tracks
+- **Cost tracking** (`budget.py` + `models.py`) — `models.py::MODEL_REGISTRY`
+  is the single source of truth per `(provider, model)`: cost (input/output
+  rates) and context-window limit together in one `ModelSpec`, replacing
+  three previously-separate, independently-drifting tables (`COST_TABLE`,
+  `_CONTEXT_LIMITS`, `_SUPPORTED_RESPONSE_MODELS`) — consolidated after a
+  real bug where `o4-mini` had a priced `COST_TABLE` entry while the
+  provider hard-rejected the model. `o1`/`o3`/`o4` (o-series) models are
+  deliberately absent from the registry, not an oversight. `Budget` tracks
   cumulative turns and cost against `max_turns`/`max_cost`, exposes raw
-  `.turns`/`.total_cost` properties.
+  `.turns`/`.total_cost` properties and a `status_note()` ("You have N
+  turn(s) remaining...") injected into the system prompt each turn via a
+  disposable overlay — the persisted system message itself is never
+  mutated.
 - **Context trimming** (`context.py`) — per-model context-window limits;
   `trim_messages` drops oldest non-system messages once usage crosses 80%
   of the limit, always preserving the system message and most recent turns.
@@ -49,10 +58,15 @@ enough time has passed — it's a snapshot, not a live view.
 Seven interchangeable loop patterns, selected via `config.yaml: loop:`.
 
 - **`react`** — standard reason/act/observe loop. Default for most agents.
-- **`plan_execute`** — plan once (numbered list, no tools), then execute
-  each step via a react sub-loop, then summarize. Falls back to plain react
-  if no plan steps parse. Static plan — no re-planning mid-execution, no
-  critique step on the plan itself.
+- **`plan_execute`** — plan once (numbered list, no tools), then a bounded
+  (max 2 rounds) critique/refine round against the plan text itself (reuses
+  `reflection`'s generate→critique→refine pattern; stops on a `DONE` marker
+  or an unparseable critique, falling back to the last good plan rather
+  than looping forever), then an optional human-approval gate
+  (`LoopCallbacks.on_plan_approval`, inert unless a `plan_prompt_fn` is
+  wired — CLI wires one by default) before executing each step via a react
+  sub-loop, then summarize. Falls back to plain react if no plan steps
+  parse.
 - **`rewoo`** — plan once *with* tool calls, execute all of them, solve once
   with all results. Only 2 LLM calls total (vs. react's per-step calls).
 - **`reflection`** — generate (react sub-loop) → critique (no tools) →
@@ -77,6 +91,18 @@ Seven interchangeable loop patterns, selected via `config.yaml: loop:`.
   Requires `old_string` to appear exactly once; errors clearly (no silent
   guessing) on zero or multiple matches. Added 2026-08-06, closing the
   "no targeted edit tool" gap.
+- `view_image(path)` / `view_document(path)` — attach a real image/PDF as a
+  vision/document content block on the *next* message, not just a text
+  description. Matched by function *identity*, not name, in
+  `execute_tool()` — an MCP server exposing its own same-named tool can't
+  get misattributed. Only the most recently viewed attachment stays "live"
+  in what's actually sent to the model (`attachments.py::prune_attachments`,
+  same disposable-overlay pattern as the budget status note); canonical,
+  session-persisted history keeps every attachment it saw, session
+  round-tripping deliberately drops them (the file itself won't survive a
+  resume anyway, since `tmp/` clears every run). See "Multimodal / file
+  handling" below for the full picture, including agent-produced binary
+  output.
 - `web_fetch(url)` — fetches a URL and extracts main readable content via
   `trafilatura` (discards nav/ads/boilerplate, not just raw HTML→text).
   Falls back to raw page text if extraction finds nothing substantial.
@@ -116,6 +142,101 @@ Seven interchangeable loop patterns, selected via `config.yaml: loop:`.
 with one public, type-annotated function into `tools/`; auto-registered by
 function name. Built-ins can't be overwritten by custom tools with the
 same name.
+
+## MCP client support (`mcp_client.py`)
+
+Agents can consume external MCP (Model Context Protocol) servers as tools —
+client only, the harness doesn't expose itself as an MCP server. Config:
+`config.yaml`'s `mcp_servers:` list (name/command/args/env per server),
+same pattern as `hooks`/`permissions`.
+
+- **`McpManager`** — the sync/async bridge. FastMCP's client (the chosen
+  package, via `fastmcp-slim[client]`) is asyncio-native with no sync API,
+  same as the official `mcp` SDK, so `McpManager` runs one persistent
+  background thread and event loop per run, holding each configured
+  server's stdio subprocess connection open for the whole run (spawned
+  once, reused for every call, not respawned per tool call) behind a plain
+  synchronous `list_tools`/`call_tool`/`close` surface.
+- **Tool merging** (`runtime.py::_start_mcp_manager`) — every discovered
+  MCP tool is auto-included in `tool_schemas`, not gated by `config.tools`
+  (the point of "auto-discovered" is the agent author doesn't hand-
+  enumerate them). **Collision policy**: a name already exposed via this
+  agent's own `config.tools` wins — MCP's version of that name is skipped.
+  A name *not* exposed by this agent (even if it exists as an unexposed
+  built-in elsewhere in the registry) is not blocked — MCP fills the gap.
+  Two MCP servers offering the same tool name: first one registered wins,
+  the rest are skipped. This means an agent author can "claim" any given
+  tool name for the harness's own implementation at any time just by
+  adding it to `config.tools` — no MCP config change needed.
+- **Fail-fast per dead server** — a normal tool-level error (bad args,
+  `fastmcp.exceptions.ToolError`) flows back to the model exactly like any
+  other tool error, unchanged. A transport-level failure (server
+  subprocess crashed, pipe broken — any other exception type) marks that
+  server dead; every subsequent call to it fails immediately with a clear
+  message instead of repeating a doomed round-trip until the budget runs
+  out.
+- Every MCP tool call still flows through the existing `on_tool_call`
+  callback (hooks, permissions, tracer) for free — it's just another entry
+  in the same `tool_registry`.
+- Scope: stdio (local subprocess) transport only, tools capability only.
+  No HTTP/SSE remote servers, no MCP server mode, no resources/prompts/
+  sampling — see `docs/roadmap.md`'s "Scoped out of MCP client support"
+  backlog for what was deliberately cut and why.
+
+## Multimodal / file handling (`attachments.py`)
+
+Full PRD + as-built spec in `docs/multimodal-plan.md`. Two capabilities:
+
+- **Vision/document input** — `view_image(path)` / `view_document(path)`
+  (see Tools above) read a file, detect its media type from magic bytes
+  (PNG/JPEG/GIF/PDF signatures, stdlib-only, no new dependency), and the
+  harness attaches it as a real provider-native content block on the
+  *next* message — Anthropic `image`/`document` blocks, OpenAI Responses
+  API `input_image`/`input_file`. Attachments are a **separate synthetic
+  message following the tool result**, never fused into the tool_result
+  block itself — necessary because both OpenAI translation paths (Chat
+  Completions and Responses) are string-only for tool output, so the same
+  uniform treatment applies to Anthropic too rather than relying on an
+  unverified provider-specific quirk.
+- **Agent-produced binary output** — any tool (built-in, custom, or MCP)
+  that creates fresh binary content it hasn't already written to disk can
+  hand it back via `attachments.py::wrap_binary_output` — embeds
+  base64+filename in its ordinary string output. `execute_tool()` detects
+  this convention on every call, decodes it, guardrails it (filename must
+  be a bare basename — not the same check as `hooks.py`'s path-traversal
+  detector, which deliberately exempts absolute paths for a different,
+  narrower purpose and would be unsafe reused here; size cap; decoded
+  bytes' magic-byte signature must match the claimed media type), and
+  saves it to `{agent_dir}/tmp/`, replacing the envelope with a short text
+  reference (`"[saved: chart.png (image/png, 42KB) -> tmp/chart.png]"`)
+  before it ever enters persisted history or the CLI display. Extraction
+  runs strictly *before* `execute_tool`'s output truncation, so a large
+  base64 payload can't get corrupted first.
+- **`{agent_dir}/tmp/`** — cleared once at the start of each run
+  (`runtime.py::prepare_runtime`, mirrors `eval/runner.py::_clear_memory`'s
+  "fresh state per run" precedent), gitignored (`**/tmp/`). Not session-
+  persisted (`session.py` deliberately unchanged) — a saved file wouldn't
+  survive a session resume in a new process anyway, since `tmp/` clears
+  every run; on resume, prior attachments round-trip as `None`, which is
+  correct, not a gap.
+- **Provider/model capability** — deliberately not pre-validated against a
+  harness-maintained "which models support vision" table (same lesson as
+  the `COST_TABLE`/o4-mini drift bug — a second stale table would be the
+  same failure shape). The provider API is the source of truth; an
+  unsupported combination surfaces as a normal `RuntimeError` (via
+  `providers/retry.py`, which now wraps `BadRequestError` instead of
+  letting it propagate raw — a real, general fix this feature's policy
+  depended on, since before it any bad request crashed the whole process
+  with an unhandled traceback). One deliberate exception: OpenAI Chat
+  Completions (`base_url`/OpenAI-compatible backends) has no PDF/file
+  content type at all, which is known ahead of time, not genuine per-model
+  variance — a `view_document` attachment there becomes an in-band text
+  note instead of a raw API rejection.
+- Verified live against the real Anthropic API (correct color/order
+  description of a real generated image — proof of genuine visual
+  perception, not a guess) and a real local OpenAI-compatible LM Studio
+  server (both the deterministic Chat-Completions note and a genuine live
+  provider rejection surfacing cleanly, not crashing).
 
 ## Safety, permissions & hooks
 
@@ -191,7 +312,9 @@ same name.
 - **`config.yaml` fields**: `provider`, `model`, `tools` (list), `loop`,
   `max_turns`, `max_cost`, `executor`, `tool_timeout`, `max_output_chars`,
   `provider_kwargs` (temperature, top_p, max_tokens, thinking, base_url,
-  reasoning_effort), `permissions`, `hooks`, `stream`, `show_thinking`.
+  reasoning_effort), `permissions`, `hooks`, `stream`, `show_thinking`,
+  `mcp_servers` (list of `{name, command, args, env}` — see "MCP client
+  support" above).
 - **CLI** (`cli.py`) — `agent-harness run <dir> [prompt]` (single-shot or
   REPL if no prompt), `agent-harness init <name>` (scaffold a new agent).
   Per-run overrides for every major config field via flags (`--provider`,
@@ -250,12 +373,15 @@ framework, same relationship as `scripts/` has to it.
 ## Example agents (`agents/`)
 
 Eleven example agents demonstrating different loop patterns: `hello`
-(react, general assistant), `hello-local` (react via LM Studio),
-`csv-analyser` (react + pandas tools), `analyst` (reflection),
-`reviewer` (eval_optimize), `persistent-coder` (ralph), `orchestrator`
-(react + `run_agent` delegation), `column-matcher` / `column-matcher-
-reflective` (the pension-data column-matching task, react vs. reflection
-variants), `local-coder`.
+(react, general assistant — also configured with an `mcp_servers:` entry
+pointing at the reference `@modelcontextprotocol/server-filesystem` via
+`npx`, so it's the live MCP-support demo alongside being the general
+assistant), `hello-local` (react via LM Studio), `csv-analyser` (react +
+pandas tools), `analyst` (reflection), `reviewer` (eval_optimize),
+`persistent-coder` (ralph), `orchestrator` (react + `run_agent`
+delegation), `column-matcher` / `column-matcher-reflective` (the
+pension-data column-matching task, react vs. reflection variants),
+`local-coder`.
 
 - **`agent_budgets`** (react + `read_file`/`content_search`/
   `list_provider_models`/`web_fetch`/`web_search`/`edit_file`) —
@@ -278,15 +404,26 @@ variants), `local-coder`.
 
 ## What's explicitly NOT built (see `docs/roadmap.md` for detail)
 
-No RAG/embeddings/vector store. No image/vision support (send or receive).
-No MCP client. No parallel sub-agent fan-out. No structured HTTP/API
-request tool (distinct from `web_fetch`, which reads pages, not JSON
-APIs). No browser automation. No messaging/notification tool. No prompt
-caching. No adaptive/dynamic re-planning. No plan-critique or
-human-in-the-loop *plan* approval (tool-call approval exists via
-`permissions.py`, used deliberately by `agent_budgets` — but nothing
-reviews a multi-step *plan* before execution the way `plan_execute`
-generates one). No todo-list mechanism for long tasks. No async/API layer
+No RAG/embeddings/vector store. No audio/video content (image and PDF
+vision/document support exists — see "Multimodal / file handling" above).
+No MCP *server* mode (client support exists — see "MCP client support"
+above); no HTTP/SSE remote MCP servers, stdio only. No parallel sub-agent
+fan-out — deliberately deferred to a future "async phase" rather than
+scheduled as a one-off, alongside the API/async-boundary item, since
+there's still no concrete driving use case in this repo (`orchestrator`
+calls `run_agent` serially). No structured HTTP/API request tool (distinct
+from `web_fetch`, which reads pages, not JSON APIs). No browser
+automation. No messaging/notification tool. No prompt caching (deliberately
+delayed until agents exist with a big enough tool/instruction footprint and
+enough turns to clear the provider's cache-block minimum and recoup the
+write-cache premium). No adaptive/dynamic re-planning — `plan_execute`'s
+critique/refine round revises the plan text once or twice before
+execution starts, but nothing re-plans mid-execution. No CLI-level
+type-ahead tool invocation or no-Enter-keypress prompts (both need the
+same raw-terminal-input infrastructure, flagged as one future "REPL input
+upgrade" rather than two separate builds) — plain `!`-prefixed inline
+shell commands are a smaller, separable, still-unbuilt item. No todo-list
+mechanism for long tasks. No async/API layer
 (FastAPI/SSE) — CLI
 only. **No PII detection/redaction of any kind** — `secrets_leakage_scanner`
 only matches API-key-shaped strings (`sk-`/`ghp_`/`AKIA`/private-key

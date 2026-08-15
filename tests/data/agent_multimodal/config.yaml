@@ -1,0 +1,7 @@
+name: test-multimodal
+provider: anthropic
+model: claude-haiku-4-5-20251001
+loop: react
+tools: [run_command, read_file, execute_code, view_image, view_document]
+max_turns: 6
+max_cost: 0.10

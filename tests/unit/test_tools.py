@@ -2,8 +2,10 @@
 
 import os
 import tempfile
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from agent_harness.attachments import wrap_binary_output
 from agent_harness.tools import (
     ToolRuntimeContext,
     build_tool_registry,
@@ -16,11 +18,16 @@ from agent_harness.tools import (
     read_file,
     registry,
     run_command,
+    view_document,
+    view_image,
     web_fetch,
     web_search,
     write_file,
 )
 from agent_harness.types import ToolCall
+
+_PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+_PDF_BYTES = b"%PDF-1.7\n" + b"\x00" * 32
 
 
 class TestGenerateSchema:
@@ -60,6 +67,31 @@ class TestRegistry:
         assert "run_command" in registry
         assert "read_file" in registry
         assert "execute_code" in registry
+        assert "view_image" in registry
+        assert "view_document" in registry
+
+
+class TestViewImage:
+    def test_returns_confirmation(self, tmp_path: Path) -> None:
+        path = tmp_path / "chart.png"
+        path.write_bytes(_PNG_BYTES)
+        result = view_image(str(path))
+        assert "chart.png" in result
+
+    def test_missing_file_raises(self) -> None:
+        try:
+            view_image("/no/such/chart.png")
+        except FileNotFoundError:
+            return
+        raise AssertionError("expected FileNotFoundError")
+
+
+class TestViewDocument:
+    def test_returns_confirmation(self, tmp_path: Path) -> None:
+        path = tmp_path / "report.pdf"
+        path.write_bytes(_PDF_BYTES)
+        result = view_document(str(path))
+        assert "report.pdf" in result
 
 
 class TestExecuteTool:
@@ -383,6 +415,83 @@ class TestListDirectory:
 
     def test_registered(self) -> None:
         assert "list_directory" in registry
+
+
+class TestExecuteToolAttachment:
+    def test_view_image_call_builds_attachment(self, tmp_path: Path) -> None:
+        path = tmp_path / "chart.png"
+        path.write_bytes(_PNG_BYTES)
+        tc = ToolCall(id="tc_1", name="view_image", arguments={"path": str(path)})
+        result = execute_tool(tc)
+        assert result.error is None
+        assert result.attachment is not None
+        assert result.attachment.kind == "image"
+        assert result.attachment.media_type == "image/png"
+        assert result.output is not None
+        assert "chart.png" in result.output
+
+    def test_view_document_call_builds_attachment(self, tmp_path: Path) -> None:
+        path = tmp_path / "report.pdf"
+        path.write_bytes(_PDF_BYTES)
+        tc = ToolCall(id="tc_1", name="view_document", arguments={"path": str(path)})
+        result = execute_tool(tc)
+        assert result.error is None
+        assert result.attachment is not None
+        assert result.attachment.kind == "document"
+
+    def test_view_image_missing_file_is_a_tool_error_not_a_crash(self) -> None:
+        tc = ToolCall(id="tc_1", name="view_image", arguments={"path": "/no/such/chart.png"})
+        result = execute_tool(tc)
+        assert result.error is not None
+        assert result.attachment is None
+
+    def test_ordinary_tool_call_has_no_attachment(self) -> None:
+        tc = ToolCall(id="tc_1", name="read_file", arguments={"path": __file__})
+        result = execute_tool(tc)
+        assert result.attachment is None
+
+    def test_mechanism_b_envelope_saved_and_output_replaced(self, tmp_path: Path) -> None:
+        def fake_tool() -> str:
+            return wrap_binary_output(_PNG_BYTES, filename="generated.png", media_type="image/png")
+
+        fake_registry = {"fake_tool": fake_tool}
+        tc = ToolCall(id="tc_1", name="fake_tool", arguments={})
+        result = execute_tool(tc, tool_registry=fake_registry, tmp_dir=str(tmp_path))
+        assert result.error is None
+        assert result.attachment is None
+        assert result.output is not None
+        assert "generated.png" in result.output
+        assert (tmp_path / "generated.png").read_bytes() == _PNG_BYTES
+
+    def test_mechanism_b_survives_tiny_max_output_chars(self, tmp_path: Path) -> None:
+        """Regression: extraction must run before truncation, or a large
+        base64 payload gets corrupted before the envelope is ever found."""
+        big_payload = _PNG_BYTES * 1000  # comfortably larger than max_output_chars below
+
+        def fake_tool() -> str:
+            return wrap_binary_output(big_payload, filename="big.png", media_type="image/png")
+
+        fake_registry = {"fake_tool": fake_tool}
+        tc = ToolCall(id="tc_1", name="fake_tool", arguments={})
+        result = execute_tool(tc, tool_registry=fake_registry, tmp_dir=str(tmp_path), max_output_chars=20)
+        assert result.error is None
+        assert (tmp_path / "big.png").read_bytes() == big_payload
+
+    def test_mcp_shadowed_view_image_does_not_build_attachment(self, tmp_path: Path) -> None:
+        """Regression: an MCP server's own tool named 'view_image' is a
+        different function object and must not be treated as the harness's
+        built-in — only identity, not the string name, should trigger
+        attachment-building."""
+
+        def other_view_image(path: str) -> str:
+            return f"mcp says: {path}"
+
+        fake_registry = {"view_image": other_view_image}
+        tc = ToolCall(id="tc_1", name="view_image", arguments={"path": str(tmp_path / "whatever.png")})
+        result = execute_tool(tc, tool_registry=fake_registry)
+        assert result.error is None
+        assert result.attachment is None
+        assert result.output == f"mcp says: {tmp_path / 'whatever.png'}"
 
 
 class TestExecuteToolTruncation:

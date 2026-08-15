@@ -1,7 +1,7 @@
 """Tests for agent_harness.context."""
 
-from agent_harness.context import estimate_tokens, get_context_limit, trim_messages
-from agent_harness.types import Message
+from agent_harness.context import _message_tokens, estimate_tokens, get_context_limit, trim_messages
+from agent_harness.types import Attachment, Message, ToolResult
 
 
 class TestEstimateTokens:
@@ -29,6 +29,20 @@ class TestGetContextLimit:
     def test_unknown_model_returns_default(self) -> None:
         limit = get_context_limit("unknown", "unknown-model")
         assert limit > 0
+
+
+class TestMessageTokens:
+    def test_attachment_data_contributes_to_estimate(self) -> None:
+        without = Message(role="tool", tool_result=ToolResult(tool_call_id="tc", output="Viewing chart.png"))
+        with_attachment = Message(
+            role="tool",
+            tool_result=ToolResult(
+                tool_call_id="tc",
+                output="Viewing chart.png",
+                attachment=Attachment(kind="image", media_type="image/png", data="a" * 4000, filename="chart.png"),
+            ),
+        )
+        assert _message_tokens(with_attachment) > _message_tokens(without)
 
 
 class TestTrimMessages:

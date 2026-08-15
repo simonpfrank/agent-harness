@@ -19,11 +19,12 @@ import httpx
 import openai
 import trafilatura
 
+from agent_harness.attachments import build_attachment_from_file, extract_and_save_binary_output
 from agent_harness.memory import list_memories as list_memories_for_dir
 from agent_harness.memory import recall_memory as recall_memory_for_dir
 from agent_harness.memory import save_memory as save_memory_for_dir
 from agent_harness.providers import registry as provider_registry
-from agent_harness.types import ToolCall, ToolResult
+from agent_harness.types import Attachment, ToolCall, ToolResult
 
 _logger = logging.getLogger(__name__)
 _TAVILY_SEARCH_URL = "https://api.tavily.com/search"
@@ -156,6 +157,44 @@ def write_file(path: str, content: str) -> str:
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content)
     return f"Written {len(content)} chars to {path}"
+
+
+def view_image(path: str) -> str:
+    """Look at an image so you can genuinely see it, not just its path.
+
+    Attaches the image as real visual content to your next message. Use
+    this after a tool produces an image (e.g. execute_code writing a
+    chart) or when given an image path directly.
+
+    Args:
+        path: Path to the image file (PNG, JPEG, or GIF).
+
+    Returns:
+        A short confirmation that the image will be attached.
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
+    """
+    size = Path(path).stat().st_size
+    return f"Viewing {Path(path).name} ({size // 1024}KB) — attached to next message."
+
+
+def view_document(path: str) -> str:
+    """Look at a PDF document so you can genuinely read it, not just its path.
+
+    Attaches the document as real content to your next message.
+
+    Args:
+        path: Path to the PDF file.
+
+    Returns:
+        A short confirmation that the document will be attached.
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
+    """
+    size = Path(path).stat().st_size
+    return f"Viewing {Path(path).name} ({size // 1024}KB) — attached to next message."
 
 
 def edit_file(path: str, old_string: str, new_string: str) -> str:
@@ -397,6 +436,8 @@ def build_tool_registry(context: ToolRuntimeContext | None = None) -> dict[str, 
         "read_file": read_file,
         "write_file": write_file,
         "edit_file": edit_file,
+        "view_image": view_image,
+        "view_document": view_document,
         "web_fetch": web_fetch,
         "web_search": web_search,
         "list_provider_models": list_provider_models,
@@ -466,10 +507,17 @@ def _truncate(output: str, max_chars: int) -> str:
     return output[:max_chars] + f"\n[truncated — {len(output)} chars total]"
 
 
+_ATTACHMENT_TOOL_KINDS: dict[Callable[..., str], str] = {
+    view_image: "image",
+    view_document: "document",
+}
+
+
 def execute_tool(
     tool_call: ToolCall,
     max_output_chars: int = _DEFAULT_MAX_OUTPUT,
     tool_registry: dict[str, Callable[..., str]] | None = None,
+    tmp_dir: str = "tmp",
 ) -> ToolResult:
     """Execute a tool call and return the result.
 
@@ -477,9 +525,14 @@ def execute_tool(
         tool_call: The tool invocation to execute.
         max_output_chars: Max output characters before truncation.
         tool_registry: Registry to use. Defaults to the module-level registry.
+        tmp_dir: Directory to save agent-produced binary output into (see
+            `attachments.extract_and_save_binary_output`).
 
     Returns:
-        ToolResult with output or error.
+        ToolResult with output or error. `attachment` is set when the
+        called tool is `view_image`/`view_document` (matched by function
+        identity, not name, so a same-named tool from elsewhere — e.g. an
+        MCP server — never triggers this).
     """
     active_registry = tool_registry or registry
     fn = active_registry.get(tool_call.name)
@@ -487,7 +540,13 @@ def execute_tool(
         return ToolResult(tool_call_id=tool_call.id, error=f"Unknown tool: {tool_call.name}")
     try:
         output = fn(**tool_call.arguments)
+        attachment: Attachment | None = None
+        kind = _ATTACHMENT_TOOL_KINDS.get(fn)
+        if kind is not None:
+            attachment = build_attachment_from_file(tool_call.arguments["path"], kind=kind)
+        else:
+            output = extract_and_save_binary_output(output, tmp_dir)
         output = _truncate(output, max_output_chars)
-        return ToolResult(tool_call_id=tool_call.id, output=output)
+        return ToolResult(tool_call_id=tool_call.id, output=output, attachment=attachment)
     except Exception as exc:
         return ToolResult(tool_call_id=tool_call.id, error=str(exc))

@@ -7,8 +7,11 @@ As a summary, be able to run an agent in a cli, and if it needs more inputs just
 ### Features
 
 - **Agent = folder** — `instructions.md` + `config.yaml` + optional `tools.md`. Copy it, share it, version it.
-- **7 loop patterns** — ReAct, Plan-and-Execute, ReWOO, Reflection, Evaluator-Optimizer, Ralph Wiggum, Debate
+- **7 loop patterns** — ReAct, Plan-and-Execute (with a plan critique/refine round and an optional human-approval gate), ReWOO, Reflection, Evaluator-Optimizer, Ralph Wiggum, Debate
 - **2 providers** — Anthropic (Claude) and OpenAI/LM Studio, with shared retry logic. Add your own in one file.
+- **MCP client support** — consume external MCP servers (stdio) as tools, auto-discovered, alongside your own built-in/custom tools
+- **Vision and document support** — `view_image`/`view_document` tools let an agent genuinely see an image or PDF it has a path to; tools can hand back freshly-generated binary content too
+- **Core built-in tools** — file read/write/edit, shell commands, code execution, web fetch/search, live vendor model listing, vision/document viewing, plus memory/routing tools (see [Built-in Tools](#built-in-tools) below for the full list)
 - **5 safety hooks on by default** — dangerous command blocking, path traversal, network exfiltration, injection scanning, secrets redaction
 - **Custom tools** — drop a Python file in `tools/`, list it in config, done
 - **Skills** — markdown knowledge files loaded into agent context automatically (shared and agent-local)
@@ -18,12 +21,13 @@ As a summary, be able to run an agent in a cli, and if it needs more inputs just
 - **Shared runtime path** — CLI runs and `run_agent` sub-agents use the same prompt assembly, hooks, permissions, tracing, and tool wiring
 - **CLI config overrides** — `--provider`, `--model`, `--loop`, `--max-turns` etc. without editing files
 - **Structured traces** — JSONL files with full conversation replay (prompts, responses, tool I/O)
-- **Budget enforcement** — turn limits and cost ceilings, deterministic (never exceeded)
+- **Budget enforcement** — turn limits and cost ceilings, deterministic (never exceeded), with a live "turns/cost remaining" note injected each turn
 - **Pluggable executor** — swap subprocess for Docker or any other sandbox
 - **Context window management** — automatic trimming when approaching model limits
 - **Scaffold command** — `agent-harness init my-agent` creates a ready-to-run agent
+- **Evaluation framework** (`eval/`) — run agents against test-case suites, gate/signal graders, ranked leaderboards
 
-See `docs/prd.md`, `docs/architecture.md` and `docs/spec.md` for full details.
+See `docs/prd.md`, `docs/architecture.md`, `docs/spec.md`, and `docs/features.md` (verified-against-code feature inventory) for full details.
 
 ## Quick Start
 Clone the repo.
@@ -86,9 +90,9 @@ See `docs/agentic-design-patterns.md` for full descriptions and flow diagrams.
 ```
 types.py (root — dataclasses only)
   ↓
-tools.py, budget.py, hooks.py, permissions.py, providers/*, config.py
+attachments.py, tools.py, budget.py, models.py, hooks.py, permissions.py, providers/*, config.py
   ↓
-runtime.py (shared execution setup)
+mcp_client.py, runtime.py (shared execution setup)
   ↓
 cli.py / routing.py
 ```
@@ -258,13 +262,14 @@ agents/my-agent/
 
 | Agent | Loop | What it does |
 |-------|------|-------------|
-| `hello` | react | General assistant — tools, code execution, the strawberry test |
+| `hello` | react | General assistant — tools, code execution, the strawberry test. Also configured with a real MCP server (`mcp_servers:`), so it doubles as the live MCP demo. |
 | `csv-analyser` | react | Analyses the included sales.csv dataset with pandas |
 | `analyst` | reflection | Data analysis with self-critique and refinement |
 | `reviewer` | eval_optimize | Code review scored against a quality rubric |
 | `persistent-coder` | ralph | Writes code, retries with fresh context until tests pass |
 | `orchestrator` | react | Routes tasks to specialist agents |
 | `hello-local` | react | Same as hello but uses LM Studio |
+| `agent_budgets` | react | Dogfooding demo — verifies the harness's own model cost table against real vendor pricing, proposes fixes for human review (never applies them itself) |
 
 ```bash
 # Count letters with code (the strawberry test)
@@ -304,9 +309,11 @@ Agents with `save_memory` and `recall_memory` tools can persist information in `
 
 | Provider | Config value | Models | Notes |
 |----------|-------------|--------|-------|
-| Anthropic | `anthropic` | claude-haiku-4-5-20251001, claude-sonnet-4-6, claude-opus-4-6 | Set `ANTHROPIC_API_KEY` |
-| OpenAI | `openai` | gpt-4o-mini, gpt-4o | Set `OPENAI_API_KEY` |
+| Anthropic | `anthropic` | claude-haiku-4-5-20251001, claude-sonnet-5, claude-opus-5, and others — see `agent_harness/models.py::MODEL_REGISTRY` for the current list | Set `ANTHROPIC_API_KEY` |
+| OpenAI | `openai` | gpt-4o/gpt-4o-mini plus the gpt-5.x family — see `MODEL_REGISTRY` | Set `OPENAI_API_KEY`. `o1`/`o3`/`o4` (o-series) models are deliberately unsupported. |
 | LM Studio / local | `openai` | any | Add `provider_kwargs.base_url` |
+
+Model cost/context-window data lives in one place, `agent_harness/models.py::MODEL_REGISTRY` — check there rather than this README for the exact current model list, since it's the single source of truth the harness itself uses (not a separate doc that can drift from it).
 
 LM Studio example:
 ```yaml
@@ -350,8 +357,46 @@ or `--show-thinking` / `--no-show-thinking` per run.
 ## Built-in Tools
 
 - `run_command` — run a shell command (uses `shlex.split`, no `shell=True`)
-- `read_file` — read file contents
+- `read_file` / `write_file` — read/write file contents (whole-file, text only)
+- `edit_file(path, old_string, new_string)` — targeted, diff-style edit; errors clearly if `old_string` isn't found exactly once
 - `execute_code` — run Python or bash snippets (configurable timeout, default 30s)
+- `web_fetch(url)` — fetch a URL, extract main readable content (via `trafilatura`, discards nav/ads/boilerplate)
+- `web_search(query)` — Tavily-based web search (`TAVILY_API_KEY` required)
+- `list_provider_models(provider)` — query the vendor's live model list directly, not any of the harness's internal tables
+- `view_image(path)` / `view_document(path)` — let the agent genuinely see an image or PDF (real vision/document content block), not just read its path. See [Vision and Documents](#vision-and-documents) below.
+
+`edit_file`/`web_fetch`/`web_search`/`list_provider_models` are gated by the network-exfiltration/permission hooks the same way `run_command` is.
+
+## MCP Client Support
+
+Agents can consume external [MCP](https://modelcontextprotocol.io/) servers as tools — client only, the harness doesn't expose itself as an MCP server. Point an agent at one or more servers in `config.yaml`:
+
+```yaml
+mcp_servers:
+  - name: filesystem
+    command: npx
+    args: ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"]
+```
+
+Every tool the server exposes gets merged into the agent's tool list automatically — no need to hand-enumerate them in `tools:`. If a tool name collides with one this agent already exposes (built-in or custom), the harness's own version wins; anything not already claimed comes from MCP. Add a name to `tools:` at any time to "claim" it for the harness's own implementation instead — no MCP config change needed.
+
+stdio (local subprocess) transport only for now — see `docs/roadmap.md` for what's deliberately not built yet (remote HTTP/SSE servers, MCP server mode).
+
+## Vision and Documents
+
+Agents can genuinely look at images and PDFs, not just read their paths:
+
+```yaml
+tools: [read_file, execute_code, view_image, view_document]
+```
+
+```bash
+python -m agent_harness run ./agents/hello "Run execute_code to make a chart, then view_image it and tell me if it looks right"
+```
+
+`view_image(path)` / `view_document(path)` attach the file as a real vision/document API content block on the agent's next message. A tool that generates binary content in-process (not already written to disk) can hand it back the same way other tools return values — see `docs/multimodal-plan.md` for the full mechanism. Only the most recently viewed attachment stays in what's actually sent to the model on later turns (keeps token cost and context usage down); nothing is lost from the persisted conversation history.
+
+Provider/model support isn't pre-validated — if a model or backend can't handle what you're sending, the provider rejects it with a clear error rather than the harness guessing ahead of time.
 
 ## Code Execution
 

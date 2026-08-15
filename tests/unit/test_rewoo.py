@@ -3,7 +3,7 @@
 from unittest.mock import MagicMock
 
 from agent_harness.loops.rewoo import _parse_tool_calls, run
-from agent_harness.types import AgentConfig, Message, Response, ToolCall, ToolResult, Usage
+from agent_harness.types import AgentConfig, Attachment, LoopCallbacks, Message, Response, ToolCall, ToolResult, Usage
 
 
 def _config(stream: bool = False) -> AgentConfig:
@@ -42,7 +42,6 @@ class TestReWOOLoop:
         chat_fn = MagicMock(side_effect=[plan_resp, solve_resp])
         on_tool_call = MagicMock(return_value=ToolResult(tool_call_id="tc_1", output="hello"))
 
-        from agent_harness.types import LoopCallbacks
         cb = LoopCallbacks(on_tool_call=on_tool_call)
         messages = [Message(role="user", content="read x")]
         result = run(chat_fn, messages, [{"name": "read_file"}], _config(), cb)
@@ -62,6 +61,39 @@ class TestReWOOLoop:
     def test_registered(self) -> None:
         from agent_harness.loops import registry
         assert "rewoo" in registry
+
+    def test_prunes_attachments_before_solve_call(self) -> None:
+        """Regression: rewoo has its own tool-execution path (doesn't
+        delegate to react_run), so pruning needs its own wiring here too."""
+        tc1 = ToolCall(id="tc_1", name="view_image", arguments={"path": "a.png"})
+        tc2 = ToolCall(id="tc_2", name="view_image", arguments={"path": "b.png"})
+        plan_resp = _response("viewing both", tool_calls=[tc1, tc2])
+        solve_resp = _response("done")
+        chat_fn = MagicMock(side_effect=[plan_resp, solve_resp])
+        attachment1 = Attachment(kind="image", media_type="image/png", data="AAAA", filename="a.png")
+        attachment2 = Attachment(kind="image", media_type="image/png", data="BBBB", filename="b.png")
+        on_tool_call = MagicMock(
+            side_effect=[
+                ToolResult(tool_call_id="tc_1", output="Viewing a.png", attachment=attachment1),
+                ToolResult(tool_call_id="tc_2", output="Viewing b.png", attachment=attachment2),
+            ]
+        )
+        cb = LoopCallbacks(on_tool_call=on_tool_call)
+        messages = [Message(role="user", content="look at these")]
+
+        run(chat_fn, messages, [{"name": "view_image"}], _config(), cb)
+
+        solve_call_messages = chat_fn.call_args_list[-1][0][0]
+        attachment_bearing = [
+            m for m in solve_call_messages if m.tool_result is not None and m.tool_result.attachment is not None
+        ]
+        assert len(attachment_bearing) == 1
+        assert attachment_bearing[0].tool_result.attachment.filename == "b.png"
+        # Canonical messages list keeps both — only the disposable overlay sent to chat_fn is pruned.
+        canonical_bearing = [
+            m for m in messages if m.tool_result is not None and m.tool_result.attachment is not None
+        ]
+        assert len(canonical_bearing) == 2
 
     def test_forwards_stream_flag(self) -> None:
         tc = ToolCall(id="tc_1", name="read_file", arguments={"path": "x"})

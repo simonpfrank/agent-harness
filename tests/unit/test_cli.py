@@ -417,6 +417,66 @@ class TestRunAgent:
         runtime.run_messages.assert_not_called()
         runtime.finalize.assert_called_once()
 
+    @patch("agent_harness.cli.prepare_runtime")
+    @patch("agent_harness.cli.config_loader")
+    def test_single_command_runtime_error_exits_cleanly(
+        self,
+        mock_config: MagicMock,
+        mock_prepare_runtime: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        cfg = AgentConfig(
+            name="test",
+            provider="anthropic",
+            model="claude-haiku-4-5-20251001",
+            agent_dir="/tmp/test",
+            instructions="Be helpful",
+            max_turns=5,
+        )
+        runtime = MagicMock()
+        runtime.init_messages.return_value = []
+        runtime.run_messages.side_effect = RuntimeError("OpenAI rejected the request: bad content")
+        mock_config.load.return_value = cfg
+        mock_prepare_runtime.return_value = runtime
+
+        with pytest.raises(SystemExit) as exc_info:
+            run_agent("./agents/hello", prompt="view this")
+
+        assert exc_info.value.code == 1
+        assert "Error: OpenAI rejected the request" in capsys.readouterr().err
+        runtime.finalize.assert_called_once()
+
+    @patch("agent_harness.cli.prompt_user")
+    @patch("agent_harness.cli.prepare_runtime")
+    @patch("agent_harness.cli.config_loader")
+    def test_repl_mode_runtime_error_continues_loop(
+        self,
+        mock_config: MagicMock,
+        mock_prepare_runtime: MagicMock,
+        mock_prompt: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        cfg = AgentConfig(
+            name="test",
+            provider="anthropic",
+            model="claude-haiku-4-5-20251001",
+            agent_dir="/tmp/test",
+            instructions="Be helpful",
+            max_turns=5,
+        )
+        runtime = MagicMock()
+        runtime.init_messages.return_value = []
+        runtime.run_messages.side_effect = [RuntimeError("bad content"), None]
+        mock_config.load.return_value = cfg
+        mock_prepare_runtime.return_value = runtime
+        mock_prompt.side_effect = ["view this", "exit"]
+
+        run_agent("./agents/hello")
+
+        assert runtime.run_messages.call_count == 1
+        assert "Error: bad content" in capsys.readouterr().err
+        runtime.finalize.assert_called_once()
+
     @patch("agent_harness.cli.prompt_user")
     @patch("agent_harness.cli.prepare_runtime")
     @patch("agent_harness.cli.config_loader")

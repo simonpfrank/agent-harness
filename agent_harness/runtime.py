@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -281,6 +282,7 @@ def _make_callbacks(
     stream: bool = False,
     show_thinking: bool = False,
     plan_prompt_fn: OnPlanApproval | None = None,
+    tmp_dir: str = "tmp",
 ) -> LoopCallbacks:
     def on_delta(_agent_id: str, text: str) -> None:
         if show_output:
@@ -318,7 +320,7 @@ def _make_callbacks(
                 show_tool_result(result)
             return result
         tracer.record("tool_call", tool=checked.name, args=checked.arguments)
-        result = execute_tool(checked, max_output_chars=max_output_chars, tool_registry=tool_registry)
+        result = execute_tool(checked, max_output_chars=max_output_chars, tool_registry=tool_registry, tmp_dir=tmp_dir)
         result = hooks.run_after_tool(checked, result)
         tracer.record("tool_result", tool=checked.name, output=result.output, error=result.error)
         if show_output:
@@ -378,6 +380,11 @@ def prepare_runtime(
         Prepared runtime object that can initialize messages, run the loop, and persist
         permission state at the end of the session.
     """
+    tmp_dir = Path(config.agent_dir) / "tmp"
+    if tmp_dir.exists():
+        shutil.rmtree(tmp_dir)
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
     tool_context = ToolRuntimeContext(
         memory_dir=f"{config.agent_dir}/memory",
         tool_timeout=config.tool_timeout,
@@ -418,6 +425,7 @@ def prepare_runtime(
         stream=config.stream,
         show_thinking=config.show_thinking,
         plan_prompt_fn=plan_prompt_fn,
+        tmp_dir=str(tmp_dir),
     )
     chat_fn = provider_registry[config.provider]
     loop_fn = loop_registry[config.loop]

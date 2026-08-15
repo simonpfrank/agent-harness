@@ -219,7 +219,14 @@ def run_agent(
     messages = runtime.init_messages(session_path=session_path)
 
     if prompt:
-        runtime.run_messages(messages, prompt=prompt)
+        try:
+            runtime.run_messages(messages, prompt=prompt)
+        except RuntimeError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            if session_path:
+                save_session(messages, session_path)
+            runtime.finalize()
+            sys.exit(1)
         if session_path:
             save_session(messages, session_path)
         runtime.finalize()
@@ -232,7 +239,11 @@ def run_agent(
                 break
             if not user_input.strip():
                 continue
-            runtime.run_messages(messages, prompt=user_input)
+            try:
+                runtime.run_messages(messages, prompt=user_input)
+            except RuntimeError as exc:
+                print(f"Error: {exc}", file=sys.stderr)
+                continue
             if session_path:
                 save_session(messages, session_path)
     except (KeyboardInterrupt, EOFError):

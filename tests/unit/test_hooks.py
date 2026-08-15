@@ -1,11 +1,30 @@
 """Tests for agent_harness.hooks."""
 
-from agent_harness.hooks import Hooks
+from pathlib import Path
+
+from agent_harness.hooks import Hooks, escapes_workspace
 from agent_harness.types import ToolCall, ToolResult
 
 
 def _tool_call(name: str, **kwargs: str) -> ToolCall:
     return ToolCall(id="tc_1", name=name, arguments=kwargs)
+
+
+class TestEscapesWorkspace:
+    """Regression coverage for the public rename (was _escapes_workspace)."""
+
+    def test_relative_path_within_workspace_does_not_escape(self, tmp_path: Path) -> None:
+        assert escapes_workspace("sub/file.txt", tmp_path) is False
+
+    def test_relative_path_traversal_escapes(self, tmp_path: Path) -> None:
+        assert escapes_workspace("../../etc/passwd", tmp_path) is True
+
+    def test_absolute_path_is_not_flagged(self, tmp_path: Path) -> None:
+        # Documented behavior, not a bug here: absolute paths are an
+        # accepted, separately-permissioned choice for explicit tool
+        # arguments. See the function's docstring for why this makes it
+        # unsuitable for validating untrusted filenames from tool output.
+        assert escapes_workspace("/etc/passwd", tmp_path) is False
 
 
 class TestDefaultHooks:

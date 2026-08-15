@@ -1,12 +1,13 @@
 """Tests for agent_harness.runtime."""
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from agent_harness.budget import Budget
 from agent_harness.config import load as load_config
 from agent_harness.permissions import PermissionDecision
 from agent_harness.runtime import _make_callbacks, prepare_runtime
-from agent_harness.types import LoopCallbacks, Message, Response, Usage
+from agent_harness.types import AgentConfig, LoopCallbacks, Message, Response, ToolCall, ToolResult, Usage
 
 VALID_AGENT = "tests/data/valid_agent"
 WITH_MCP_SERVERS = "tests/data/agent_with_mcp_servers"
@@ -319,3 +320,66 @@ class TestMcpWiring:
             trace_enabled=False,
         )
         runtime.finalize()  # should not raise
+
+
+def _tmp_agent_config(agent_dir: Path, tools: list[str] | None = None) -> AgentConfig:
+    return AgentConfig(
+        name="test",
+        provider="anthropic",
+        model="claude-haiku-4-5-20251001",
+        agent_dir=str(agent_dir),
+        instructions="test",
+        tools=tools or [],
+        max_turns=5,
+    )
+
+
+class TestTmpDirLifecycle:
+    def test_creates_tmp_dir_if_absent(self, tmp_path: Path) -> None:
+        agent_dir = tmp_path / "agent"
+        agent_dir.mkdir()
+        config = _tmp_agent_config(agent_dir)
+
+        runtime = prepare_runtime(
+            config, permission_prompt_fn=lambda _tc: PermissionDecision.deny(), show_output=False, trace_enabled=False,
+        )
+
+        assert (agent_dir / "tmp").is_dir()
+        runtime.finalize()
+
+    def test_clears_pre_existing_tmp_dir_contents(self, tmp_path: Path) -> None:
+        agent_dir = tmp_path / "agent"
+        agent_dir.mkdir()
+        stale_tmp = agent_dir / "tmp"
+        stale_tmp.mkdir()
+        (stale_tmp / "stale_file.png").write_bytes(b"old data")
+        config = _tmp_agent_config(agent_dir)
+
+        runtime = prepare_runtime(
+            config, permission_prompt_fn=lambda _tc: PermissionDecision.deny(), show_output=False, trace_enabled=False,
+        )
+
+        assert not (stale_tmp / "stale_file.png").exists()
+        assert stale_tmp.is_dir()
+        runtime.finalize()
+
+    def test_tmp_dir_threaded_into_execute_tool(self, tmp_path: Path) -> None:
+        agent_dir = tmp_path / "agent"
+        agent_dir.mkdir()
+        config = _tmp_agent_config(agent_dir, tools=["read_file"])
+
+        with patch("agent_harness.runtime.execute_tool") as mock_execute_tool:
+            mock_execute_tool.return_value = ToolResult(tool_call_id="tc", output="ok")
+            runtime = prepare_runtime(
+                config,
+                permission_prompt_fn=lambda _tc: PermissionDecision.deny(),
+                show_output=False,
+                trace_enabled=False,
+            )
+            tc = ToolCall(id="tc", name="read_file", arguments={"path": "x"})
+            assert runtime.callbacks.on_tool_call is not None
+            runtime.callbacks.on_tool_call(tc)
+
+        _, kwargs = mock_execute_tool.call_args
+        assert kwargs["tmp_dir"] == str(agent_dir / "tmp")
+        runtime.finalize()
