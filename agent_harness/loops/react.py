@@ -8,6 +8,7 @@ from typing import Any
 
 from agent_harness.attachments import prune_attachments
 from agent_harness.context import get_context_limit, trim_messages
+from agent_harness.loops.common import check_tool_thrashing
 from agent_harness.tools import execute_tool
 from agent_harness.types import AgentConfig, LoopCallbacks, Message, Response
 
@@ -55,6 +56,8 @@ def run(
     """
     cb = callbacks or LoopCallbacks()
     context_limit = get_context_limit(config.provider, config.model)
+    call_counts: dict[str, int] = {}
+    error_streaks: dict[str, int] = {}
     turn = 0
     while turn < config.max_turns:
         trimmed = trim_messages(messages, context_limit)
@@ -81,15 +84,25 @@ def run(
         if response.stop_reason != "tool_use":
             break
 
+        thrash_detail: str | None = None
+        thrash_tool = ""
         for tc in response.message.tool_calls or []:
             logger.debug("Executing tool: %s(%s)", tc.name, list(tc.arguments.keys()))
             result = cb.on_tool_call(tc) if cb.on_tool_call else execute_tool(tc)
             if result is not None:
                 messages.append(Message(role="tool", tool_result=result))
+            detail = check_tool_thrashing(tc, result, call_counts, error_streaks, config.thrash_threshold)
+            if detail is not None:
+                thrash_detail = detail
+                thrash_tool = tc.name
 
         turn += 1
         if budget_exceeded:
             break
+        if thrash_detail is not None:
+            messages.append(Message(role="user", content=thrash_detail))
+            if cb.on_thrash_detected:
+                cb.on_thrash_detected(thrash_tool, thrash_detail)
 
     last = messages[-1] if messages else None
     return last.content or "" if last else ""

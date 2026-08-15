@@ -12,10 +12,11 @@ from dotenv import load_dotenv
 
 from agent_harness.config import load
 from agent_harness.loops import registry as loop_registry
+from agent_harness.loops.react import run as react_run
 from agent_harness.providers import registry as provider_registry
 from agent_harness.tools import execute_tool, generate_schema
 from agent_harness.tools import registry as tool_registry
-from agent_harness.types import LoopCallbacks, Message
+from agent_harness.types import LoopCallbacks, Message, ToolCall, ToolResult
 
 load_dotenv()
 
@@ -127,6 +128,45 @@ class TestCompletionCheck:
         assert status_calls == [(True, "[exit code 0]")]
 
         counter_path.unlink(missing_ok=True)
+
+
+@requires_api_key
+class TestThrashGuardPlumbing:
+    def test_seeded_history_with_nudge_survives_real_api_round_trip(self) -> None:
+        """Not a test that a live model actually thrashes on cue — a capable
+        model won't reliably repeat itself just because we ask it to, so
+        that isn't a reliable thing to assert against a real API. Detection
+        *logic* is fully covered by tests/unit/test_loops_common.py and
+        tests/unit/test_react_loop.py (deterministic, mocked). This proves
+        the *plumbing*: a conversation history containing several repeated
+        failed tool-call turns plus an already-injected thrash-guard nudge
+        message survives a real provider round-trip without error."""
+        cfg = load("tests/data/agent_react")
+        chat_fn = provider_registry[cfg.provider]
+
+        messages = [
+            Message(role="system", content=cfg.instructions),
+            Message(role="user", content="Say hello in one word."),
+        ]
+        fake_tc = ToolCall(id="tc_1", name="search", arguments={"q": "x"})
+        for i in range(3):
+            messages.append(Message(role="assistant", content=None, tool_calls=[fake_tc]))
+            messages.append(
+                Message(role="tool", tool_result=ToolResult(tool_call_id="tc_1", error=f"boom {i}")),
+            )
+        messages.append(
+            Message(
+                role="user",
+                content="Thrash guard: 'search' has now failed 3 times in a row. "
+                "Stop retrying the same approach and try something different.",
+            ),
+        )
+
+        cb = LoopCallbacks(on_tool_call=execute_tool)
+        result = react_run(chat_fn, messages, [], cfg, cb)
+
+        assert isinstance(result, str)
+        assert result != ""
 
 
 @requires_api_key

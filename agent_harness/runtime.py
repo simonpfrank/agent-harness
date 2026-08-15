@@ -16,6 +16,7 @@ from agent_harness.display import (
     show_delta,
     show_response,
     show_thinking_delta,
+    show_thrash_warning,
     show_tool_call,
     show_tool_result,
 )
@@ -352,6 +353,11 @@ def _make_callbacks(
             show_completion_status(verified, detail)
         tracer.record("completion_status", verified=verified, detail=detail)
 
+    def on_thrash_detected(tool_name: str, detail: str) -> None:
+        if show_output:
+            show_thrash_warning(tool_name, detail)
+        tracer.record("thrash_detected", tool=tool_name, detail=detail)
+
     on_plan_approval: OnPlanApproval | None = None
     if plan_prompt_fn is not None:
         def _on_plan_approval(steps: list[str]) -> bool:
@@ -370,6 +376,7 @@ def _make_callbacks(
         on_thinking_delta=on_thinking_delta,
         on_completion_status=on_completion_status,
         is_budget_exceeded=is_budget_exceeded,
+        on_thrash_detected=on_thrash_detected,
     )
 
 

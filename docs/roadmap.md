@@ -11,7 +11,7 @@ When an item ships, move it to the **Done** section at the bottom with a commit 
 Ranked list of everything currently committed to build (drawn from `Near-term Improvements` and `Plausible Future Capabilities` below — `Ideas`/`Scoped out`/`Rejected` stay unranked, not commitments). Ranking logic: quick wins first, then dependency order within a track. See each item's own detail section for the *why*.
 
 **Track A — Agent capability/correctness** (no dependency on Track B; sequenced first per 2026-08-15 discussion — don't scale exposure to a still-unverified core before fixing the core):
-1. Adaptive re-planning
+1. Adaptive re-planning — builds on the thrashing breaker's escalation signal (shipped, see Done)
 
 **Track B — Interface/access expansion** (multi-device, multi-task future — Echo/phone/Reachy, not just CLI):
 2. Concurrency-safety for per-agent-dir state — cheap, not actually gated on the rest of this track, can go anytime
@@ -136,7 +136,28 @@ Not part of the sequence: **API/async boundary** is a standing design constraint
 
 ### Adaptive re-planning (added 2026-08-15)
 
-**Status:** Active roadmap design — Priority Order #1
+**Status:** Active roadmap design — Priority Order #1, built on the
+step-level tool-call thrashing breaker (shipped, see Done) as its trigger
+
+**Tunability discipline, settled 2026-08-15, applies here too:** every
+threshold this ends up needing is a `config.yaml` field with a sensible
+default, same low-friction pattern as `completion_check`/`max_turns`/
+`thrash_threshold` — no code change needed to retune once live. Any
+internal prompt this needs (e.g. an escalation critique) starts as a
+plain hardcoded constant, same convention as `reflection.py`'s
+`_CRITIQUE_PROMPT` — **no agent-local prompt-override file or other
+tuning convention gets built speculatively.** That was raised and
+retracted the same session it was suggested for the thrashing breaker:
+premature infrastructure for a prompt that doesn't exist yet, before any
+trace has shown the default wording is actually a problem — same logic
+applies here. If tuning it later turns out to be genuinely needed, adding
+an override then costs nothing extra. Use `trace.py`'s structured JSONL
+(log the actual reasoning content at each escalation, not just a
+boolean) to detect problems empirically, and the existing `eval/`
+framework (cells + leaderboard) to A/B threshold or prompt changes — both
+already exist, building a separate experimentation system for this would
+be duplicate functionality. Code-level tweaks only follow hard evidence
+from those, never speculation.
 
 **What:** `plan_execute.py` plans once, does at most 2 critique/refine
 rounds on the plan *text* before execution starts, then commits —
@@ -148,7 +169,65 @@ below) — a static plan is a real ceiling for open-ended tasks where
 surprises are the norm, and this is core single-agent capability,
 independent of any interface/concurrency work.
 
-**Scope in roadmap terms:** not designed yet.
+**Scope in roadmap terms:** not designed yet, but a real design discussion
+(2026-08-15) settled several things worth preserving before this gets
+built, not re-derived from scratch:
+
+- **Trigger is the thrashing breaker above, not "any tool error."** A
+  tool error alone means "still executing," not "needs replanning" — most
+  errors (wrong ID, wrong operand, a bad search term) are tool-use
+  corrections that converge within the breaker's own retry budget with no
+  plan involvement at all. Only budget-exhaustion escalates here. This
+  keeps the (expensive) plan-level critique call rare rather than firing
+  on every tool hiccup.
+- **The escalation call needs three possible outputs, not one.** Framing
+  it as "always produces a revised plan" is wrong — often the right
+  answer is "plan's fine, retry this step with a nudge, no structural
+  change" (the common case when a step is merely thrashing, not actually
+  broken), or "swap this one step's approach, rest of the plan untouched"
+  (local fix), or, rarer, "this changes what comes after" (real
+  restructure). Forcing a plan revision every time this fires would make
+  the cure worse than the disease.
+- **Revise minimally, not by full regeneration.** When a real revision is
+  needed, ask for the smallest change that addresses the failure, not a
+  wholesale rewrite of the remaining plan — smaller diffs are inherently
+  lower-risk, and there's no way to *guarantee* a revision is actually
+  better before it executes (true of any adaptive system), so bounding
+  blast radius matters more than trying to perfect the revision.
+- **A circuit breaker on repeated escalation, on top of the thrashing
+  breaker.** If escalation fires again shortly after the last one (not
+  just "N total escalations" but "escalated twice in a row without
+  converging"), that's a stronger thrashing-at-the-plan-level signal —
+  stop and **hand back to the human** via the existing plan-approval gate
+  rather than silently keep revising. Confirmed with the user: hand-back,
+  not auto-stop — this will likely also need better prompting on the
+  escalation call itself, flagged as a follow-up, not solved by the
+  breaker alone.
+- **Detecting a *successful* tool result that's still wrong for this
+  stage of the plan is a separate, harder problem than detecting tool
+  errors** — worth designing in from the start rather than assuming the
+  breaker above covers it (it doesn't; no error occurs in this case, so
+  the breaker never fires). Two genuinely different failure shapes:
+  - *The tool's answer is factually wrong* (stale data, wrong match,
+    tool-side mistake) — this generally has no general solution without
+    either ground truth or a domain-specific verification tool for that
+    step (the same optional-hook idea as `completion_check`, applied per
+    step instead of per whole-run). Be honest that this is a fundamental
+    limit, not a gap to promise away.
+  - *The tool's answer is correct but doesn't match what the plan
+    assumed* (e.g. plan expected JSON, tool correctly reports it's CSV)
+    — this is much more tractable: have plan generation state each step's
+    *expected* shape/type/rough bounds as part of the plan text itself,
+    then check the actual result against that stated expectation before
+    proceeding. This is a structural mismatch check, not a truth-verification
+    check, so it doesn't require ground truth — and stating the
+    expectation *before* seeing the result avoids the model just
+    rationalizing whatever came back after the fact.
+  - Absent either mechanism, wrongness often (not reliably) surfaces
+    later when a downstream step tries to consume a bad value and
+    something breaks or looks absurd — a weak, late safety net, not a
+    design to rely on; by the time it surfaces, especially near the end
+    of a plan, damage may already be done.
 
 ### Concurrency-safety for per-agent-dir state (added 2026-08-15)
 
@@ -773,6 +852,18 @@ Verified live, zero mocks, real files, real API calls throughout: a real striped
 Verified: `pytest tests/unit -q` → 644 passed (up from 588); ruff clean; `mypy --strict` clean (91 files); `radon cc --min D` → none (no D-or-worse anywhere). Real, zero-mock integration test (`tests/integration/test_real_loops.py::TestCompletionCheck`) proves a genuine fail-then-retry-then-pass cycle against the live Anthropic API — a deterministic counter-based checker script fails its first invocation and passes every one after, independent of model behavior, confirming the retry mechanism works end-to-end rather than just in mocked unit tests.
 
 `docs/roadmap.md` Priority Order renumbered (Adaptive re-planning is now #1); `docs/features.md`/`README.md` updated.
+
+### Step-level tool-call thrashing breaker (added 2026-08-15, resolved 2026-08-15)
+
+`react.py` now guards against a step thrashing — the same tool erroring `thrash_threshold` times in a row, or called with identical arguments that many times total in one run (default 3, on by default unlike `completion_check`, since a repeated failure is never something an agent legitimately wants unbounded; `<= 0` disables it). Detect-and-nudge-only MVP, as scoped: an explicit message ("this approach isn't working, try something fundamentally different") feeds back to the model once per turn, `LoopCallbacks.on_thrash_detected(tool_name, detail)` fires (traced as `thrash_detected`, shown via a new `display.py::show_thrash_warning`), and the loop otherwise continues exactly as before — no stop/escalate pathway; that's "Adaptive re-planning" (above), a separate, later item this is the trigger mechanism for.
+
+Detection lives in a new pure helper, `loops/common.py::check_tool_thrashing` (mutates two per-run dicts — `call_counts`/`error_streaks` — passed in by `react.py`, error streak checked first when both signals fire on the same call). Because `reflection`/`eval_optimize`/`plan_execute`'s step execution and `ralph`'s per-attempt execution all delegate to a react sub-loop, every one of them gets this for free with zero changes to those files; `rewoo.py` has its own independent tool-execution path and doesn't — acknowledged, not built.
+
+**One correctness fix made during implementation review, not caught by the initial design:** the first sketch injected the nudge message *inside* the per-tool-call loop, immediately after the triggering call's result. Reviewed against the provider message-translation layer's constraints before building: Anthropic's API expects every `tool_result` for one assistant turn's `tool_use` blocks to arrive together, correlated by ID — injecting a `user`-role message between two sibling `tool_result`s (a turn with 2+ tool calls, thrashing detected on an early one) risked breaking that pairing. Fixed by deferring the nudge append to *after* the whole turn's tool calls are resolved — the same slot `reflection.py`/`ralph.py`'s own follow-up messages already use safely — locked in with a dedicated multi-tool-call-in-one-turn positioning test.
+
+Verified: `pytest tests/unit -q` → 668 passed (up from 644); ruff clean; `mypy --strict` clean (92 files); `radon cc --min D` → none (`react.py::run` moved from C(15) to C(18), still comfortably inside the C band). Real, zero-mock integration test (`tests/integration/test_real_loops.py::TestThrashGuardPlumbing`) seeds a conversation history with several pre-built repeated-failure tool-call turns plus an already-injected nudge message and confirms it survives a real Anthropic API round-trip — explicitly testing plumbing, not live-model misbehavior (a capable model won't reliably thrash on cue, so detection logic is covered by deterministic mocked unit tests instead). All 12 existing real-API loop-pattern integration tests re-run and passed unchanged, confirming the new on-by-default threshold doesn't interfere with any normal, non-thrashing run.
+
+`docs/roadmap.md` Priority Order renumbered (Adaptive re-planning is now #1, no longer built-on-a-pending-prerequisite); `docs/features.md` updated.
 
 ---
 

@@ -58,6 +58,18 @@ enough time has passed — it's a snapshot, not a live view.
 Seven interchangeable loop patterns, selected via `config.yaml: loop:`.
 
 - **`react`** — standard reason/act/observe loop. Default for most agents.
+  Includes a **thrash guard**, on by default (`config.yaml:
+  thrash_threshold`, default 3; `<= 0` disables it): if the same tool
+  errors that many times in a row, or is called with the exact same
+  arguments that many times total in one run, an explicit nudge message
+  ("this approach isn't working, try something different") is fed back to
+  the model after the turn completes, and `LoopCallbacks.on_thrash_detected`
+  fires (traced as `thrash_detected`). Detect-and-nudge only — no
+  stop/escalate behavior; the loop continues exactly as before otherwise.
+  Because `reflection`/`eval_optimize`/`plan_execute`'s step execution and
+  `ralph`'s per-attempt execution all delegate to a react sub-loop, every
+  loop gets this for free; `rewoo` has its own independent tool-execution
+  path and doesn't (acknowledged gap, not yet built).
 - **`plan_execute`** — plan once (numbered list, no tools), then a bounded
   (max 2 rounds) critique/refine round against the plan text itself (reuses
   `reflection`'s generate→critique→refine pattern; stops on a `DONE` marker
@@ -358,7 +370,8 @@ Full PRD + as-built spec in `docs/multimodal-plan.md`. Two capabilities:
   `provider_kwargs` (temperature, top_p, max_tokens, thinking, base_url,
   reasoning_effort), `permissions`, `hooks`, `stream`, `show_thinking`,
   `mcp_servers` (list of `{name, command, args, env}` — see "MCP client
-  support" above), `completion_check` (see "Verified completion" above).
+  support" above), `completion_check` (see "Verified completion" above),
+  `thrash_threshold` (see "Agent loops" above — on by default, 3).
 - **CLI** (`cli.py`) — `agent-harness run <dir> [prompt]` (single-shot or
   REPL if no prompt), `agent-harness init <name>` (scaffold a new agent).
   Per-run overrides for every major config field via flags (`--provider`,

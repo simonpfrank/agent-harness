@@ -92,6 +92,7 @@ class AgentConfig:
     show_thinking: bool = False
     mcp_servers: list[dict[str, Any]] = field(default_factory=list)
     completion_check: str | None = None
+    thrash_threshold: int = 3
 
 
 # Callback type aliases
@@ -103,6 +104,7 @@ OnPlanApproval = Callable[[list[str]], bool]
 OnDelta = Callable[[str, str], None]
 OnCompletionStatus = Callable[[bool, str], None]
 OnIsBudgetExceeded = Callable[[], bool]
+OnThrashDetected = Callable[[str, str], None]
 
 
 @dataclass
@@ -118,3 +120,4 @@ class LoopCallbacks:
     on_thinking_delta: OnDelta | None = None
     on_completion_status: OnCompletionStatus | None = None
     is_budget_exceeded: OnIsBudgetExceeded | None = None
+    on_thrash_detected: OnThrashDetected | None = None

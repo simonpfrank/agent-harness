@@ -97,6 +97,7 @@ class TestAgentConfig:
         assert cfg.stream is False
         assert cfg.show_thinking is False
         assert cfg.completion_check is None
+        assert cfg.thrash_threshold == 3
 
 
 class TestCallbackAliases:
@@ -149,3 +150,14 @@ class TestLoopCallbacks:
         cb = LoopCallbacks(is_budget_exceeded=lambda: True)
         assert cb.is_budget_exceeded is not None
         assert cb.is_budget_exceeded() is True
+
+    def test_on_thrash_detected_defaults_to_none(self) -> None:
+        cb = LoopCallbacks()
+        assert cb.on_thrash_detected is None
+
+    def test_on_thrash_detected_takes_tool_name_and_detail(self) -> None:
+        received: list[tuple[str, str]] = []
+        cb = LoopCallbacks(on_thrash_detected=lambda tool, detail: received.append((tool, detail)))
+        assert cb.on_thrash_detected is not None
+        cb.on_thrash_detected("search", "thrashing")
+        assert received == [("search", "thrashing")]

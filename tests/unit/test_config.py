@@ -78,6 +78,10 @@ class TestLoadValid:
         cfg = load(WITH_COMPLETION_CHECK)
         assert cfg.completion_check == "pytest -q"
 
+    def test_thrash_threshold_defaults_to_3(self) -> None:
+        cfg = load(VALID)
+        assert cfg.thrash_threshold == 3
+
 
 class TestLoadInvalid:
     def test_missing_instructions(self) -> None:

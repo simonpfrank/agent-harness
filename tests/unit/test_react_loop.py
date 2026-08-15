@@ -15,7 +15,7 @@ from agent_harness.types import (
 )
 
 
-def _config(max_turns: int = 10, stream: bool = False) -> AgentConfig:
+def _config(max_turns: int = 10, stream: bool = False, thrash_threshold: int = 3) -> AgentConfig:
     return AgentConfig(
         name="test",
         provider="anthropic",
@@ -24,6 +24,7 @@ def _config(max_turns: int = 10, stream: bool = False) -> AgentConfig:
         instructions="test",
         max_turns=max_turns,
         stream=stream,
+        thrash_threshold=thrash_threshold,
     )
 
 
@@ -265,3 +266,134 @@ class TestRunCallbacks:
         assert messages[-1].role == "tool"
         assert messages[-1].tool_result is not None
         assert messages[-1].tool_result.tool_call_id == "tc_1"
+
+
+def _nudges(messages: list[Message]) -> list[Message]:
+    return [m for m in messages if m.role == "user" and m.content and "Thrash guard" in m.content]
+
+
+class TestThrashDetection:
+    def test_error_streak_triggers_one_nudge_after_the_turn(self) -> None:
+        tc = ToolCall(id="tc_1", name="search", arguments={"q": "x"})
+        responses = [
+            _response("try", stop_reason="tool_use", tool_calls=[tc]),
+            _response("try", stop_reason="tool_use", tool_calls=[tc]),
+            _response("try", stop_reason="tool_use", tool_calls=[tc]),
+            _response("done"),
+        ]
+        chat_fn = MagicMock(side_effect=responses)
+        on_tool_call = MagicMock(
+            side_effect=[
+                ToolResult(tool_call_id="tc_1", error="boom"),
+                ToolResult(tool_call_id="tc_1", error="boom"),
+                ToolResult(tool_call_id="tc_1", error="boom"),
+            ],
+        )
+        messages = [Message(role="user", content="search for x")]
+        cb = LoopCallbacks(on_tool_call=on_tool_call)
+        run(chat_fn, messages, [], _config(thrash_threshold=3), callbacks=cb)
+        nudges = _nudges(messages)
+        assert len(nudges) == 1
+        # nudge sits right after the 3rd (final) error result, before the next assistant turn
+        idx = messages.index(nudges[0])
+        prior_result = messages[idx - 1].tool_result
+        assert messages[idx - 1].role == "tool"
+        assert prior_result is not None
+        assert prior_result.error == "boom"
+        assert messages[idx + 1].role == "assistant"
+        assert messages[idx + 1].content == "done"
+
+    def test_below_threshold_no_nudge(self) -> None:
+        tc = ToolCall(id="tc_1", name="search", arguments={"q": "x"})
+        responses = [
+            _response("try", stop_reason="tool_use", tool_calls=[tc]),
+            _response("done"),
+        ]
+        chat_fn = MagicMock(side_effect=responses)
+        on_tool_call = MagicMock(return_value=ToolResult(tool_call_id="tc_1", error="boom"))
+        messages = [Message(role="user", content="go")]
+        cb = LoopCallbacks(on_tool_call=on_tool_call)
+        run(chat_fn, messages, [], _config(thrash_threshold=3), callbacks=cb)
+        assert _nudges(messages) == []
+
+    def test_threshold_zero_disables_detection(self) -> None:
+        tc = ToolCall(id="tc_1", name="search", arguments={"q": "x"})
+        responses = [_response("try", stop_reason="tool_use", tool_calls=[tc])] * 3 + [_response("done")]
+        chat_fn = MagicMock(side_effect=responses)
+        on_tool_call = MagicMock(return_value=ToolResult(tool_call_id="tc_1", error="boom"))
+        messages = [Message(role="user", content="go")]
+        cb = LoopCallbacks(on_tool_call=on_tool_call)
+        run(chat_fn, messages, [], _config(thrash_threshold=0), callbacks=cb)
+        assert _nudges(messages) == []
+
+    def test_duplicate_args_triggers_nudge(self) -> None:
+        tc = ToolCall(id="tc_1", name="search", arguments={"q": "x"})
+        responses = [_response("try", stop_reason="tool_use", tool_calls=[tc])] * 3 + [_response("done")]
+        chat_fn = MagicMock(side_effect=responses)
+        on_tool_call = MagicMock(return_value=ToolResult(tool_call_id="tc_1", output="no results"))
+        messages = [Message(role="user", content="go")]
+        cb = LoopCallbacks(on_tool_call=on_tool_call)
+        run(chat_fn, messages, [], _config(thrash_threshold=3), callbacks=cb)
+        assert len(_nudges(messages)) == 1
+
+    def test_on_thrash_detected_called_with_tool_and_detail(self) -> None:
+        tc = ToolCall(id="tc_1", name="search", arguments={"q": "x"})
+        responses = [_response("try", stop_reason="tool_use", tool_calls=[tc])] * 3 + [_response("done")]
+        chat_fn = MagicMock(side_effect=responses)
+        on_tool_call = MagicMock(return_value=ToolResult(tool_call_id="tc_1", error="boom"))
+        on_thrash_detected = MagicMock()
+        messages = [Message(role="user", content="go")]
+        cb = LoopCallbacks(on_tool_call=on_tool_call, on_thrash_detected=on_thrash_detected)
+        run(chat_fn, messages, [], _config(thrash_threshold=3), callbacks=cb)
+        on_thrash_detected.assert_called_once()
+        args = on_thrash_detected.call_args[0]
+        assert args[0] == "search"
+        assert isinstance(args[1], str)
+
+    def test_no_crash_when_on_thrash_detected_unset(self) -> None:
+        tc = ToolCall(id="tc_1", name="search", arguments={"q": "x"})
+        responses = [_response("try", stop_reason="tool_use", tool_calls=[tc])] * 3 + [_response("done")]
+        chat_fn = MagicMock(side_effect=responses)
+        on_tool_call = MagicMock(return_value=ToolResult(tool_call_id="tc_1", error="boom"))
+        messages = [Message(role="user", content="go")]
+        cb = LoopCallbacks(on_tool_call=on_tool_call)
+        result = run(chat_fn, messages, [], _config(thrash_threshold=3), callbacks=cb)
+        assert result == "done"
+
+    def test_multi_tool_call_turn_nudge_positioned_after_both_results(self) -> None:
+        """A turn with two tool calls where thrashing is detected on the
+        second must not inject the nudge between the two tool_result
+        messages — both results must stay contiguous, matching how a
+        provider correlates tool_use/tool_result pairs for one turn."""
+        search_1 = ToolCall(id="tc_1", name="search", arguments={"q": "x"})
+        read = ToolCall(id="tc_2", name="read_file", arguments={"path": "a"})
+        search_2 = ToolCall(id="tc_3", name="search", arguments={"q": "x"})
+        responses = [
+            _response("try", stop_reason="tool_use", tool_calls=[search_1]),
+            _response("try both", stop_reason="tool_use", tool_calls=[read, search_2]),
+            _response("done"),
+        ]
+        chat_fn = MagicMock(side_effect=responses)
+        on_tool_call = MagicMock(
+            side_effect=[
+                ToolResult(tool_call_id="tc_1", output="no results"),
+                ToolResult(tool_call_id="tc_2", output="file contents"),
+                ToolResult(tool_call_id="tc_3", output="no results"),
+            ],
+        )
+        messages = [Message(role="user", content="go")]
+        cb = LoopCallbacks(on_tool_call=on_tool_call)
+        run(chat_fn, messages, [], _config(thrash_threshold=2), callbacks=cb)
+        nudges = _nudges(messages)
+        assert len(nudges) == 1
+        idx = messages.index(nudges[0])
+        # the two tool-role messages from the second turn are contiguous,
+        # immediately preceding the nudge — not split by it
+        last_result = messages[idx - 1].tool_result
+        prev_result = messages[idx - 2].tool_result
+        assert messages[idx - 1].role == "tool"
+        assert last_result is not None
+        assert last_result.tool_call_id == "tc_3"
+        assert messages[idx - 2].role == "tool"
+        assert prev_result is not None
+        assert prev_result.tool_call_id == "tc_2"

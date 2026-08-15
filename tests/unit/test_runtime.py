@@ -184,6 +184,38 @@ class TestOnCompletionStatus:
         tracer.record.assert_called_once_with("completion_status", verified=False, detail="FAIL: red")
 
 
+class TestOnThrashDetected:
+    @patch("agent_harness.runtime.show_thrash_warning")
+    def test_calls_show_thrash_warning_when_show_output(self, mock_show: MagicMock) -> None:
+        cb = _make_callbacks(
+            budget=MagicMock(), hooks=MagicMock(), permissions=MagicMock(), tracer=MagicMock(),
+            tool_registry={}, max_output_chars=10_000, show_output=True,
+        )
+        assert cb.on_thrash_detected is not None
+        cb.on_thrash_detected("search", "thrashing")
+        mock_show.assert_called_once_with("search", "thrashing")
+
+    @patch("agent_harness.runtime.show_thrash_warning")
+    def test_hidden_when_show_output_false(self, mock_show: MagicMock) -> None:
+        cb = _make_callbacks(
+            budget=MagicMock(), hooks=MagicMock(), permissions=MagicMock(), tracer=MagicMock(),
+            tool_registry={}, max_output_chars=10_000, show_output=False,
+        )
+        assert cb.on_thrash_detected is not None
+        cb.on_thrash_detected("search", "thrashing")
+        mock_show.assert_not_called()
+
+    def test_records_trace_event(self) -> None:
+        tracer = MagicMock()
+        cb = _make_callbacks(
+            budget=MagicMock(), hooks=MagicMock(), permissions=MagicMock(), tracer=tracer,
+            tool_registry={}, max_output_chars=10_000, show_output=False,
+        )
+        assert cb.on_thrash_detected is not None
+        cb.on_thrash_detected("search", "thrashing")
+        tracer.record.assert_called_once_with("thrash_detected", tool="search", detail="thrashing")
+
+
 class TestOnPlanApproval:
     def test_none_when_no_plan_prompt_fn(self) -> None:
         cb = _make_callbacks(

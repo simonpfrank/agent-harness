@@ -13,6 +13,7 @@ from agent_harness.display import (
     show_delta,
     show_response,
     show_thinking_delta,
+    show_thrash_warning,
     show_tool_call,
     show_tool_result,
 )
@@ -94,6 +95,17 @@ class TestShowCompletionStatus:
         recorder = _recording_console()
         with patch.object(display, "console", recorder):
             show_completion_status(False, "FAIL: expected list[str] but got list[int]")
+        assert "list[str]" in recorder.export_text()
+
+
+class TestShowThrashWarning:
+    def test_no_crash(self) -> None:
+        show_thrash_warning("search", "Thrash guard: called 3 times")
+
+    def test_bracket_content_not_swallowed_as_markup(self) -> None:
+        recorder = _recording_console()
+        with patch.object(display, "console", recorder):
+            show_thrash_warning("search", "expected list[str] but got list[int]")
         assert "list[str]" in recorder.export_text()
 
 

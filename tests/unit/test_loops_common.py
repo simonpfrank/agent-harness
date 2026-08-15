@@ -1,6 +1,6 @@
 """Tests for agent_harness.loops.common's shared completion_check helpers."""
 
-from agent_harness.loops.common import report_completion_status, run_completion_check
+from agent_harness.loops.common import check_tool_thrashing, report_completion_status, run_completion_check
 from agent_harness.types import AgentConfig, LoopCallbacks, ToolCall, ToolResult
 
 
@@ -129,3 +129,107 @@ class TestReportCompletionStatus:
         cb = LoopCallbacks(on_completion_status=lambda v, d: calls.append((v, d)))
         report_completion_status(cb, _config(completion_check="x"), False, "FAIL: red")
         assert calls == [(False, "FAIL: red")]
+
+
+class TestCheckToolThrashing:
+    def _tc(self, name: str = "search", args: dict[str, object] | None = None) -> ToolCall:
+        return ToolCall(id="tc_1", name=name, arguments=args if args is not None else {"q": "x"})
+
+    def test_below_threshold_no_nudge(self) -> None:
+        counts: dict[str, int] = {}
+        streaks: dict[str, int] = {}
+        tc = self._tc()
+        for _ in range(2):
+            detail = check_tool_thrashing(tc, ToolResult(tool_call_id="tc_1", output="ok"), counts, streaks, 3)
+        assert detail is None
+
+    def test_duplicate_args_threshold_reached(self) -> None:
+        counts: dict[str, int] = {}
+        streaks: dict[str, int] = {}
+        tc = self._tc()
+        detail = None
+        for _ in range(3):
+            detail = check_tool_thrashing(tc, ToolResult(tool_call_id="tc_1", output="ok"), counts, streaks, 3)
+        assert detail is not None
+        assert "search" in detail
+        assert "3" in detail
+
+    def test_consecutive_error_streak_reached(self) -> None:
+        counts: dict[str, int] = {}
+        streaks: dict[str, int] = {}
+        detail = None
+        for i in range(3):
+            tc = self._tc(args={"q": f"attempt-{i}"})  # different args each time
+            detail = check_tool_thrashing(tc, ToolResult(tool_call_id="tc_1", error="boom"), counts, streaks, 3)
+        assert detail is not None
+        assert "3" in detail
+
+    def test_success_resets_error_streak(self) -> None:
+        # Different args per call to isolate the error-streak signal from
+        # the duplicate-args signal (identical args would trip that too).
+        counts: dict[str, int] = {}
+        streaks: dict[str, int] = {}
+        check_tool_thrashing(
+            self._tc(args={"q": "a"}), ToolResult(tool_call_id="tc_1", error="boom"), counts, streaks, 3,
+        )
+        check_tool_thrashing(
+            self._tc(args={"q": "b"}), ToolResult(tool_call_id="tc_1", error="boom"), counts, streaks, 3,
+        )
+        check_tool_thrashing(
+            self._tc(args={"q": "c"}), ToolResult(tool_call_id="tc_1", output="ok"), counts, streaks, 3,
+        )
+        # streak reset — one more error shouldn't hit the threshold of 3 yet
+        detail = check_tool_thrashing(
+            self._tc(args={"q": "d"}), ToolResult(tool_call_id="tc_1", error="boom"), counts, streaks, 3,
+        )
+        assert streaks["search"] == 1
+        assert detail is None
+
+    def test_error_streak_is_per_tool_name(self) -> None:
+        counts: dict[str, int] = {}
+        streaks: dict[str, int] = {}
+        search_tc = self._tc(name="search")
+        other_tc = self._tc(name="read_file")
+        check_tool_thrashing(search_tc, ToolResult(tool_call_id="tc_1", error="boom"), counts, streaks, 3)
+        check_tool_thrashing(other_tc, ToolResult(tool_call_id="tc_2", error="boom"), counts, streaks, 3)
+        check_tool_thrashing(other_tc, ToolResult(tool_call_id="tc_2", error="boom"), counts, streaks, 3)
+        assert streaks["search"] == 1
+        assert streaks["read_file"] == 2
+
+    def test_threshold_zero_disables_detection(self) -> None:
+        counts: dict[str, int] = {}
+        streaks: dict[str, int] = {}
+        tc = self._tc()
+        detail = None
+        for _ in range(10):
+            detail = check_tool_thrashing(tc, ToolResult(tool_call_id="tc_1", error="boom"), counts, streaks, 0)
+        assert detail is None
+
+    def test_both_conditions_true_error_streak_wins(self) -> None:
+        counts: dict[str, int] = {}
+        streaks: dict[str, int] = {}
+        tc = self._tc()
+        detail = None
+        for _ in range(3):
+            # same args every time AND erroring every time -> both signals true
+            detail = check_tool_thrashing(tc, ToolResult(tool_call_id="tc_1", error="boom"), counts, streaks, 3)
+        assert detail is not None
+        assert "failed" in detail.lower() or "error" in detail.lower()
+
+    def test_none_result_counts_toward_duplicate_args_not_streak(self) -> None:
+        counts: dict[str, int] = {}
+        streaks: dict[str, int] = {}
+        tc = self._tc()
+        detail = None
+        for _ in range(3):
+            detail = check_tool_thrashing(tc, None, counts, streaks, 3)
+        assert detail is not None
+        assert streaks.get("search", 0) == 0
+
+    def test_dicts_mutated_in_place(self) -> None:
+        counts: dict[str, int] = {}
+        streaks: dict[str, int] = {}
+        tc = self._tc()
+        check_tool_thrashing(tc, ToolResult(tool_call_id="tc_1", error="boom"), counts, streaks, 3)
+        assert streaks["search"] == 1
+        assert any(k.startswith("search:") for k in counts)

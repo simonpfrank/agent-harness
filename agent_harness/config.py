@@ -79,4 +79,5 @@ def load(agent_dir: str) -> AgentConfig:
         show_thinking=raw.get("show_thinking", False),
         mcp_servers=raw.get("mcp_servers", []),
         completion_check=raw.get("completion_check"),
+        thrash_threshold=raw.get("thrash_threshold", 3),
     )

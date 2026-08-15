@@ -76,6 +76,16 @@ def show_budget(summary: str) -> None:
     console.print(Text(summary, style="dim"))
 
 
+def show_thrash_warning(tool_name: str, detail: str) -> None:
+    """Display a thrash-guard nudge.
+
+    Args:
+        tool_name: The tool whose repeated/erroring calls triggered detection.
+        detail: The nudge text fed back to the model.
+    """
+    console.print(Panel(Text(detail), title=Text(f"Thrash guard: {tool_name}"), border_style="yellow"))
+
+
 def show_completion_status(verified: bool, detail: str) -> None:
     """Display whether the loop's completion was actually verified.
 
