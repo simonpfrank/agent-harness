@@ -76,6 +76,19 @@ def show_budget(summary: str) -> None:
     console.print(Text(summary, style="dim"))
 
 
+def show_completion_status(verified: bool, detail: str) -> None:
+    """Display whether the loop's completion was actually verified.
+
+    Args:
+        verified: True if completion_check passed before the loop stopped.
+        detail: The check's own output on pass/fail, or a fixed reason if
+            the loop stopped without ever running it (e.g. budget exceeded).
+    """
+    style = "green" if verified else "red"
+    label = "Verified complete" if verified else "NOT verified"
+    console.print(Text(f"{label}: {detail}", style=style))
+
+
 def prompt_user() -> str:
     """Styled input prompt.
 

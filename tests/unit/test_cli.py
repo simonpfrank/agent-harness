@@ -195,6 +195,16 @@ class TestValidateConfig:
                 )
             )
 
+    def test_completion_check_on_unsupported_loop_warns(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level("WARNING"):
+            validate_config(_valid_config(loop="react", completion_check="pytest -q"))
+        assert any("completion_check" in r.message for r in caplog.records)
+
+    def test_completion_check_on_supported_loop_no_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level("WARNING"):
+            validate_config(_valid_config(loop="ralph", completion_check="pytest -q"))
+        assert not any("completion_check" in r.message for r in caplog.records)
+
     def test_thinking_on_non_anthropic_provider_rejected(self) -> None:
         with pytest.raises(ValueError, match="thinking"):
             validate_config(

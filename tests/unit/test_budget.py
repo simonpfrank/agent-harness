@@ -71,6 +71,34 @@ class TestBudgetRawProperties:
         assert budget.total_cost > 0.0
 
 
+class TestBudgetIsExceeded:
+    def test_not_exceeded_when_fresh(self) -> None:
+        budget = Budget(_config(max_turns=5))
+        assert budget.is_exceeded() is False
+
+    def test_exceeded_after_turns_reach_max(self) -> None:
+        budget = Budget(_config(max_turns=2))
+        usage = Usage(input_tokens=10, output_tokens=10)
+        budget.record(usage)
+        budget.record(usage)
+        assert budget.is_exceeded() is True
+
+    def test_is_exceeded_is_readonly(self) -> None:
+        budget = Budget(_config(max_turns=10))
+        budget.record(Usage(input_tokens=10, output_tokens=10))
+        turns_before = budget.turns
+        cost_before = budget.total_cost
+        budget.is_exceeded()
+        budget.is_exceeded()
+        assert budget.turns == turns_before
+        assert budget.total_cost == cost_before
+
+    def test_exceeded_when_cost_at_max(self) -> None:
+        budget = Budget(_config(max_turns=999, max_cost=0.001))
+        budget.record(Usage(input_tokens=1000, output_tokens=1000))
+        assert budget.is_exceeded() is True
+
+
 class TestBudgetStatusNote:
     def test_turns_only_when_no_max_cost(self) -> None:
         budget = Budget(_config(max_turns=5, max_cost=None))

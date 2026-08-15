@@ -382,6 +382,24 @@ Every tool the server exposes gets merged into the agent's tool list automatical
 
 stdio (local subprocess) transport only for now — see `docs/roadmap.md` for what's deliberately not built yet (remote HTTP/SSE servers, MCP server mode).
 
+## Verified Completion
+
+`reflection`, `ralph`, and `eval_optimize` normally trust the model's own "DONE"/`SCORE: N/10` self-report. Give them something real to check instead:
+
+```yaml
+loop: ralph
+completion_check: "pytest -q"
+```
+
+A shell command's real exit code decides pass/fail (nothing forced — plain self-report is still the default with `completion_check` unset). Or point it at one of your own tools instead of a shell command — the same "build a tool, tell the agent to call it last" pattern you could always write in `instructions.md`, except now the harness actually enforces it rather than trusting the model to remember:
+
+```yaml
+tools: [run_command, verify_output]
+completion_check: verify_output
+```
+
+A completion-check tool must work with no arguments, and its output should start with `PASS` or `FAIL` (case-insensitive) so the harness doesn't have to guess. On failure, the check's own output is fed back to the model and the loop retries — bounded by the same `max_turns`/budget cap as everything else, never an unbounded extra loop. Whichever way you point it, the check runs through the normal tool-call path, so permissions/hooks/tracing apply exactly like any other tool call.
+
 ## Vision and Documents
 
 Agents can genuinely look at images and PDFs, not just read their paths:

@@ -91,6 +91,7 @@ class AgentConfig:
     stream: bool = False
     show_thinking: bool = False
     mcp_servers: list[dict[str, Any]] = field(default_factory=list)
+    completion_check: str | None = None
 
 
 # Callback type aliases
@@ -100,6 +101,8 @@ OnBudget = Callable[[Usage], bool]
 OnBudgetStatus = Callable[[], str]
 OnPlanApproval = Callable[[list[str]], bool]
 OnDelta = Callable[[str, str], None]
+OnCompletionStatus = Callable[[bool, str], None]
+OnIsBudgetExceeded = Callable[[], bool]
 
 
 @dataclass
@@ -113,3 +116,5 @@ class LoopCallbacks:
     on_plan_approval: OnPlanApproval | None = None
     on_delta: OnDelta | None = None
     on_thinking_delta: OnDelta | None = None
+    on_completion_status: OnCompletionStatus | None = None
+    is_budget_exceeded: OnIsBudgetExceeded | None = None

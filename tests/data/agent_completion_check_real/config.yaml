@@ -1,0 +1,7 @@
+name: completion-check-real-agent
+provider: anthropic
+model: claude-haiku-4-5-20251001
+loop: ralph
+tools: []
+max_turns: 5
+completion_check: "python3 tests/data/agent_completion_check_real/checker.py"

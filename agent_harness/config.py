@@ -78,4 +78,5 @@ def load(agent_dir: str) -> AgentConfig:
         stream=raw.get("stream", False),
         show_thinking=raw.get("show_thinking", False),
         mcp_servers=raw.get("mcp_servers", []),
+        completion_check=raw.get("completion_check"),
     )

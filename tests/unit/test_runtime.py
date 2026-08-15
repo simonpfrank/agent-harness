@@ -139,6 +139,51 @@ class TestGetBudgetStatus:
         budget.status_note.assert_called_once()
 
 
+class TestIsBudgetExceeded:
+    def test_wired_to_budget_is_exceeded(self) -> None:
+        budget = MagicMock()
+        budget.is_exceeded.return_value = True
+        cb = _make_callbacks(
+            budget=budget, hooks=MagicMock(), permissions=MagicMock(), tracer=MagicMock(),
+            tool_registry={}, max_output_chars=10_000, show_output=True,
+        )
+        assert cb.is_budget_exceeded is not None
+        assert cb.is_budget_exceeded() is True
+        budget.is_exceeded.assert_called_once()
+
+
+class TestOnCompletionStatus:
+    @patch("agent_harness.runtime.show_completion_status")
+    def test_calls_show_completion_status_when_show_output(self, mock_show: MagicMock) -> None:
+        cb = _make_callbacks(
+            budget=MagicMock(), hooks=MagicMock(), permissions=MagicMock(), tracer=MagicMock(),
+            tool_registry={}, max_output_chars=10_000, show_output=True,
+        )
+        assert cb.on_completion_status is not None
+        cb.on_completion_status(True, "PASS: good")
+        mock_show.assert_called_once_with(True, "PASS: good")
+
+    @patch("agent_harness.runtime.show_completion_status")
+    def test_hidden_when_show_output_false(self, mock_show: MagicMock) -> None:
+        cb = _make_callbacks(
+            budget=MagicMock(), hooks=MagicMock(), permissions=MagicMock(), tracer=MagicMock(),
+            tool_registry={}, max_output_chars=10_000, show_output=False,
+        )
+        assert cb.on_completion_status is not None
+        cb.on_completion_status(True, "PASS: good")
+        mock_show.assert_not_called()
+
+    def test_records_trace_event(self) -> None:
+        tracer = MagicMock()
+        cb = _make_callbacks(
+            budget=MagicMock(), hooks=MagicMock(), permissions=MagicMock(), tracer=tracer,
+            tool_registry={}, max_output_chars=10_000, show_output=False,
+        )
+        assert cb.on_completion_status is not None
+        cb.on_completion_status(False, "FAIL: red")
+        tracer.record.assert_called_once_with("completion_status", verified=False, detail="FAIL: red")
+
+
 class TestOnPlanApproval:
     def test_none_when_no_plan_prompt_fn(self) -> None:
         cb = _make_callbacks(

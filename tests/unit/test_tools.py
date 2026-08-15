@@ -118,7 +118,7 @@ class TestExecuteTool:
 class TestRunCommand:
     def test_simple_command(self) -> None:
         output = run_command("echo hello")
-        assert output.strip() == "hello"
+        assert "hello" in output
 
     def test_working_dir(self) -> None:
         output = run_command("pwd", working_dir="/tmp")
@@ -127,6 +127,14 @@ class TestRunCommand:
     def test_failing_command(self) -> None:
         output = run_command("ls /nonexistent_dir_xyz")
         assert "No such file" in output or "cannot access" in output
+
+    def test_appends_exit_code_zero_on_success(self) -> None:
+        output = run_command("echo hello")
+        assert "[exit code 0]" in output
+
+    def test_appends_nonzero_exit_code_on_failure(self) -> None:
+        output = run_command("ls /nonexistent_dir_xyz")
+        assert "[exit code 2]" in output or "[exit code 1]" in output
 
 
 class TestReadFile:

@@ -71,16 +71,60 @@ Seven interchangeable loop patterns, selected via `config.yaml: loop:`.
   with all results. Only 2 LLM calls total (vs. react's per-step calls).
 - **`reflection`** — generate (react sub-loop) → critique (no tools) →
   refine → repeat until the critique contains `DONE` or `max_turns` hits.
-  Completion detection is a self-report (model saying "DONE"), not verified.
+  Completion detection is a self-report (model saying "DONE") unless
+  `completion_check` is configured (see below), in which case a DONE claim
+  must also pass the check before the loop stops.
 - **`eval_optimize`** — same shape as reflection, but the critique produces
   a numeric `SCORE: N/10` against a pass threshold (7/10) instead of a
-  DONE marker.
+  DONE marker. Also honors `completion_check`.
 - **`ralph`** — "Ralph Wiggum" loop: fresh context on every retry (only
   original system+user messages carried forward), retries until the
-  response contains `DONE` or `max_turns` is hit. No sub-task tracking, no
-  actual test-running — trusts the model's self-report same as reflection.
+  response contains `DONE` or `max_turns` is hit. No sub-task tracking.
+  Also honors `completion_check` — a failed check feeds back into the
+  *same* attempt rather than starting fresh (discarding real failure
+  feedback every time would defeat the point of checking at all); with no
+  `completion_check` configured, behavior is unchanged from before. The
+  outer retry loop also now stops promptly once the shared `Budget` is
+  exceeded, rather than burning through remaining attempts.
 - **`debate`** — two personas argue for/against a position across
   `max_turns` rounds, then a synthesis call reconciles them into one answer.
+
+### Verified completion (`completion_check`)
+
+Optional `config.yaml: completion_check: <string>` field (default unset —
+fully inert, zero behavior change for any agent that doesn't set it).
+Honored by `reflection`/`ralph`/`eval_optimize` only (a `logger.warning`
+fires at load time if set on a loop that ignores it).
+
+Resolution, always dispatched as a tool call through the normal
+`on_tool_call` path (permissions/hooks/tracing apply exactly like any
+other tool call — deliberate, e.g. `dangerous_command_blocker` still
+protects a badly-configured check): if the string names one of the
+agent's exposed tools, that tool is called with no arguments (a
+completion-check tool must work with zero required arguments — "build a
+tool, tell the agent to call it last" was already possible via
+`instructions.md`; this is what makes it *enforced* rather than optional).
+Otherwise the string is treated as a shell command and dispatched through
+the built-in `run_command` tool.
+
+Pass/fail convention, checked in order: a tool error → FAIL; output
+starting with `PASS`/`FAIL` (case-insensitive) → that; a trailing
+`[exit code N]` marker (`run_command` now always appends one, pass or
+fail — previously it never read `result.returncode` at all, so a failing
+shell command was indistinguishable from a passing one) → `N == 0`;
+anything else → FAIL, not a silent pass.
+
+On failure, the check's own output is fed back to the model as a user
+message and the loop retries — bounded by the loop's existing
+`max_turns`/`Budget` machinery, no separate unbounded retry path. A new
+`LoopCallbacks.on_completion_status(verified, detail)` callback fires
+once at the end of a run **only when `completion_check` is set**, wired
+to a new `display.py::show_completion_status` line (green "Verified
+complete" / red "NOT verified", mirroring `show_budget`'s shape) — this
+closes a real gap: `cli.py` previously discarded a loop's return value
+entirely, so nothing distinguished "stopped because verified" from
+"stopped because budget ran out, unverified" in what the user actually
+saw.
 
 ## Tools
 
@@ -314,7 +358,7 @@ Full PRD + as-built spec in `docs/multimodal-plan.md`. Two capabilities:
   `provider_kwargs` (temperature, top_p, max_tokens, thinking, base_url,
   reasoning_effort), `permissions`, `hooks`, `stream`, `show_thinking`,
   `mcp_servers` (list of `{name, command, args, env}` — see "MCP client
-  support" above).
+  support" above), `completion_check` (see "Verified completion" above).
 - **CLI** (`cli.py`) — `agent-harness run <dir> [prompt]` (single-shot or
   REPL if no prompt), `agent-harness init <name>` (scaffold a new agent).
   Per-run overrides for every major config field via flags (`--provider`,

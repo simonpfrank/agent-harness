@@ -96,6 +96,7 @@ class TestAgentConfig:
         assert cfg.tools_guidance is None
         assert cfg.stream is False
         assert cfg.show_thinking is False
+        assert cfg.completion_check is None
 
 
 class TestCallbackAliases:
@@ -127,3 +128,24 @@ class TestLoopCallbacks:
         cb.on_delta("default", "hi")
         cb.on_thinking_delta("default", "hmm")
         assert received == [("delta", "default", "hi"), ("thinking", "default", "hmm")]
+
+    def test_completion_callbacks_default_to_none(self) -> None:
+        cb = LoopCallbacks()
+        assert cb.on_completion_status is None
+        assert cb.is_budget_exceeded is None
+
+    def test_on_completion_status_takes_verified_and_detail(self) -> None:
+        received: list[tuple[bool, str]] = []
+
+        def record(verified: bool, detail: str) -> None:
+            received.append((verified, detail))
+
+        cb = LoopCallbacks(on_completion_status=record)
+        assert cb.on_completion_status is not None
+        cb.on_completion_status(True, "PASS")
+        assert received == [(True, "PASS")]
+
+    def test_is_budget_exceeded_returns_bool(self) -> None:
+        cb = LoopCallbacks(is_budget_exceeded=lambda: True)
+        assert cb.is_budget_exceeded is not None
+        assert cb.is_budget_exceeded() is True

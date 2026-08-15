@@ -7,7 +7,7 @@ import re
 from collections.abc import Callable
 from typing import Any
 
-from agent_harness.loops.common import ensure_clean_state
+from agent_harness.loops.common import ensure_clean_state, report_completion_status, run_completion_check
 from agent_harness.loops.react import run as react_run
 from agent_harness.types import AgentConfig, LoopCallbacks, Message, Response
 
@@ -70,6 +70,7 @@ def run(
         )
         messages.append(eval_response.message)
         if cb.on_budget and cb.on_budget(eval_response.usage):
+            report_completion_status(cb, config, False, "stopped: budget exceeded before completion was verified")
             break
 
         eval_text = eval_response.message.content or ""
@@ -77,9 +78,21 @@ def run(
         logger.info("Eval iteration %d: score %d/10", iteration + 1, score)
 
         if score >= _PASS_THRESHOLD:
+            if config.completion_check:
+                verified, detail = run_completion_check(cb, tool_schemas, config)
+                if verified:
+                    report_completion_status(cb, config, True, detail)
+                    break
+                logger.info("Eval completion_check failed: %s", detail[:80])
+                messages.append(
+                    Message(role="user", content=f"Completion check failed:\n{detail}\nAddress this and continue."),
+                )
+                continue
             break
 
         # Improve
         messages.append(Message(role="user", content="Improve your response based on the evaluation feedback above."))
+    else:
+        report_completion_status(cb, config, False, "stopped: max_turns reached without passing completion_check")
 
     return last_output

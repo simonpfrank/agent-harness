@@ -9,6 +9,7 @@ from agent_harness import display
 from agent_harness.display import (
     prompt_user,
     show_budget,
+    show_completion_status,
     show_delta,
     show_response,
     show_thinking_delta,
@@ -80,6 +81,20 @@ class TestShowBudget:
         with patch.object(display, "console", recorder):
             show_budget("Turn 1/10 | $0.0012 [warning]")
         assert "[warning]" in recorder.export_text()
+
+
+class TestShowCompletionStatus:
+    def test_no_crash_verified(self) -> None:
+        show_completion_status(True, "PASS: all good")
+
+    def test_no_crash_not_verified(self) -> None:
+        show_completion_status(False, "stopped: budget exceeded")
+
+    def test_bracket_content_not_swallowed_as_markup(self) -> None:
+        recorder = _recording_console()
+        with patch.object(display, "console", recorder):
+            show_completion_status(False, "FAIL: expected list[str] but got list[int]")
+        assert "list[str]" in recorder.export_text()
 
 
 class TestShowDelta:

@@ -1,0 +1,6 @@
+name: completion-check-agent
+provider: anthropic
+model: claude-haiku-4-5-20251001
+tools: [read_file]
+max_turns: 5
+completion_check: "pytest -q"

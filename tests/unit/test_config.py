@@ -8,6 +8,7 @@ VALID = "tests/data/valid_agent"
 NO_INSTRUCTIONS = "tests/data/invalid_agent_no_instructions"
 STREAMING = "tests/data/streaming_agent"
 WITH_MCP_SERVERS = "tests/data/agent_with_mcp_servers"
+WITH_COMPLETION_CHECK = "tests/data/agent_with_completion_check"
 
 
 class TestLoadValid:
@@ -67,6 +68,15 @@ class TestLoadValid:
                 "env": {"SOME_VAR": "1"},
             },
         ]
+
+
+    def test_completion_check_defaults_to_none(self) -> None:
+        cfg = load(VALID)
+        assert cfg.completion_check is None
+
+    def test_loads_completion_check(self) -> None:
+        cfg = load(WITH_COMPLETION_CHECK)
+        assert cfg.completion_check == "pytest -q"
 
 
 class TestLoadInvalid:

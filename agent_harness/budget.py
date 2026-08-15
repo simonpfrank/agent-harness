@@ -38,6 +38,17 @@ class Budget:
         output_cost = (usage.output_tokens / 1_000_000) * output_rate
         self._total_cost += input_cost + output_cost
 
+        return self._over_limits()
+
+    def is_exceeded(self) -> bool:
+        """Check whether the budget is already exceeded, without recording new usage.
+
+        Returns:
+            True if turn count or cost limit has already been reached.
+        """
+        return self._over_limits()
+
+    def _over_limits(self) -> bool:
         if self._turns >= self._max_turns:
             return True
         return self._max_cost is not None and self._total_cost >= self._max_cost

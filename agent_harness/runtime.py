@@ -12,6 +12,7 @@ from typing import Any
 from agent_harness.budget import Budget
 from agent_harness.display import (
     show_budget,
+    show_completion_status,
     show_delta,
     show_response,
     show_thinking_delta,
@@ -257,6 +258,12 @@ def validate_config(
             raise ValueError("stream is not supported for OpenAI Chat Completions (custom base_url) backends")
     if "thinking" in config.provider_kwargs and config.provider != "anthropic":
         raise ValueError(f"thinking is only supported for the anthropic provider, got '{config.provider}'")
+    if config.completion_check and config.loop not in ("reflection", "ralph", "eval_optimize"):
+        logger.warning(
+            "completion_check is set but loop '%s' does not honor it "
+            "(only reflection/ralph/eval_optimize do) — it will be silently ignored",
+            config.loop,
+        )
 
 
 def deny_permission(_tool_call: ToolCall) -> PermissionDecision:
@@ -337,6 +344,14 @@ def _make_callbacks(
         tracer.record("budget", summary=budget.summary(), exceeded=exceeded)
         return exceeded
 
+    def is_budget_exceeded() -> bool:
+        return budget.is_exceeded()
+
+    def on_completion_status(verified: bool, detail: str) -> None:
+        if show_output:
+            show_completion_status(verified, detail)
+        tracer.record("completion_status", verified=verified, detail=detail)
+
     on_plan_approval: OnPlanApproval | None = None
     if plan_prompt_fn is not None:
         def _on_plan_approval(steps: list[str]) -> bool:
@@ -353,6 +368,8 @@ def _make_callbacks(
         on_plan_approval=on_plan_approval,
         on_delta=on_delta,
         on_thinking_delta=on_thinking_delta,
+        on_completion_status=on_completion_status,
+        is_budget_exceeded=is_budget_exceeded,
     )
 
 

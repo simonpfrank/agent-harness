@@ -5,6 +5,7 @@ Skipped if ANTHROPIC_API_KEY is not set.
 """
 
 import os
+from pathlib import Path
 
 import pytest
 from dotenv import load_dotenv
@@ -95,6 +96,37 @@ class TestRalphLoop:
     def test_succeeds_with_done(self) -> None:
         result = _run_agent("tests/data/agent_ralph", "Say hello and then say DONE.")
         assert "DONE" in result or "done" in result.lower()
+
+
+@requires_api_key
+class TestCompletionCheck:
+    def test_real_fail_then_retry_then_pass(self) -> None:
+        """completion_check's checker.py deterministically fails its first
+        invocation and passes every one after — proving a genuine
+        fail-then-retry-then-pass cycle against the live API, not just
+        mocked plumbing."""
+        counter_path = Path("tests/data/agent_completion_check_real/counter.txt")
+        counter_path.unlink(missing_ok=True)
+
+        status_calls: list[tuple[bool, str]] = []
+        cfg = load("tests/data/agent_completion_check_real")
+        chat_fn = provider_registry[cfg.provider]
+        loop_fn = loop_registry[cfg.loop]
+        cb = LoopCallbacks(
+            on_tool_call=execute_tool,
+            on_completion_status=lambda v, d: status_calls.append((v, d)),
+        )
+        messages = [
+            Message(role="system", content=cfg.instructions),
+            Message(role="user", content="Complete the task."),
+        ]
+        result = loop_fn(chat_fn, messages, [], cfg, cb)
+
+        assert "DONE" in result.upper()
+        assert int(counter_path.read_text()) == 2  # failed once, passed once
+        assert status_calls == [(True, "[exit code 0]")]
+
+        counter_path.unlink(missing_ok=True)
 
 
 @requires_api_key

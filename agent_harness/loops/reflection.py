@@ -6,7 +6,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from agent_harness.loops.common import ensure_clean_state
+from agent_harness.loops.common import ensure_clean_state, report_completion_status, run_completion_check
 from agent_harness.loops.react import run as react_run
 from agent_harness.types import AgentConfig, LoopCallbacks, Message, Response
 
@@ -56,15 +56,28 @@ def run(
         if cb.on_response:
             cb.on_response(critique)
         if cb.on_budget and cb.on_budget(critique.usage):
+            report_completion_status(cb, config, False, "stopped: budget exceeded before completion was verified")
             break
 
         critique_text = critique.message.content or ""
         logger.info("Reflection iteration %d: %s", iteration + 1, critique_text[:80])
 
         if "DONE" in critique_text.upper():
+            if config.completion_check:
+                verified, detail = run_completion_check(cb, tool_schemas, config)
+                if verified:
+                    report_completion_status(cb, config, True, detail)
+                    break
+                logger.info("Reflection completion_check failed: %s", detail[:80])
+                messages.append(
+                    Message(role="user", content=f"Completion check failed:\n{detail}\nAddress this and continue."),
+                )
+                continue
             break
 
         # Set up refinement prompt
         messages.append(Message(role="user", content="Refine your response based on the critique above."))
+    else:
+        report_completion_status(cb, config, False, "stopped: max_turns reached without passing completion_check")
 
     return last_output

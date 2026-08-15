@@ -349,6 +349,7 @@ def _run_command_impl(command: str, working_dir: str, timeout: int) -> str:
     output = result.stdout
     if result.stderr:
         output += result.stderr
+    output += f"\n[exit code {result.returncode}]"
     return output
 
 

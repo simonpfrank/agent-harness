@@ -11,17 +11,16 @@ When an item ships, move it to the **Done** section at the bottom with a commit 
 Ranked list of everything currently committed to build (drawn from `Near-term Improvements` and `Plausible Future Capabilities` below — `Ideas`/`Scoped out`/`Rejected` stay unranked, not commitments). Ranking logic: quick wins first, then dependency order within a track. See each item's own detail section for the *why*.
 
 **Track A — Agent capability/correctness** (no dependency on Track B; sequenced first per 2026-08-15 discussion — don't scale exposure to a still-unverified core before fixing the core):
-1. Verified task completion
-2. Adaptive re-planning
+1. Adaptive re-planning
 
 **Track B — Interface/access expansion** (multi-device, multi-task future — Echo/phone/Reachy, not just CLI):
-3. Concurrency-safety for per-agent-dir state — cheap, not actually gated on the rest of this track, can go anytime
-4. Permission/approval UX for no-terminal contexts — also covers plan-approval's (`_plan_prompt`) identical fragility
-5. API / async boundary (thin sync/threaded wrapper — not an asyncio core rewrite)
+2. Concurrency-safety for per-agent-dir state — cheap, not actually gated on the rest of this track, can go anytime
+3. Permission/approval UX for no-terminal contexts — also covers plan-approval's (`_plan_prompt`) identical fragility
+4. API / async boundary (thin sync/threaded wrapper — not an asyncio core rewrite)
 
-**Track C — Single-task execution speed/quality** (separate from A and B — not about interfaces, about how well one task executes; soft-depends on Track B #4 only if approval-gated tools are involved):
-6. Parallel tool-call execution within a turn — has a concrete driving case (a research agent firing multiple fetches per turn)
-7. Parallel sub-agent fan-out — still no concrete driver, stays deferred
+**Track C — Single-task execution speed/quality** (separate from A and B — not about interfaces, about how well one task executes; soft-depends on Track B #3 only if approval-gated tools are involved):
+5. Parallel tool-call execution within a turn — has a concrete driving case (a research agent firing multiple fetches per turn)
+6. Parallel sub-agent fan-out — still no concrete driver, stays deferred
 
 **Deprioritized, no pressing need (2026-08-15):** CLI REPL single-keypress prompts, CLI REPL `#` type-ahead tool invocation — left scoped below for whenever a real need surfaces. `!` prefix for inline shell stays as an optional quick win, not urgent.
 
@@ -135,33 +134,9 @@ which input mechanism is chosen.
 
 Not part of the sequence: **API/async boundary** is a standing design constraint ("if an API is ever added, keep async at the boundary"), not a buildable task — it activates only if something else creates a reason for an external API; conceptually the same "async phase" bucket as parallel fan-out above. **Lazy tool schema loading** doesn't clear this file's own benefit-vs-complexity bar (see its entry below) and isn't scheduled.
 
-### Verified task completion (added 2026-08-15)
-
-**Status:** Active roadmap design — Priority Order #1
-
-**What:** None of the self-terminating loops verify their own completion
-against reality. `reflection.py`/`eval_optimize.py` stop on the model's
-own critique containing `DONE` or a self-reported `SCORE: N/10`;
-`ralph.py` stops when the model's response contains the literal word
-`DONE` (`_DONE_MARKER`). All three trust the model's self-report; none
-run a test suite, check output against a spec, or otherwise verify
-programmatically.
-
-**Why:** Raised originally in "Refining the reflection loop" and "What a
-decent coding agent would need" (Ideas, below) — promoted here 2026-08-15
-because scaling exposure (more interfaces, more concurrent agents) on top
-of an unverified completion signal compounds the risk rather than just
-repeating it.
-
-**Scope in roadmap terms:** not designed yet. Possible directions already
-captured in "Refining the reflection loop" (Ideas): structured pass/fail
-critique output instead of keyword matching, or letting the critique
-phase reference programmatic verification (borrowing `eval/`'s grader
-concept — gate vs signal — rather than reinventing verification per loop).
-
 ### Adaptive re-planning (added 2026-08-15)
 
-**Status:** Active roadmap design — Priority Order #2
+**Status:** Active roadmap design — Priority Order #1
 
 **What:** `plan_execute.py` plans once, does at most 2 critique/refine
 rounds on the plan *text* before execution starts, then commits —
@@ -177,7 +152,7 @@ independent of any interface/concurrency work.
 
 ### Concurrency-safety for per-agent-dir state (added 2026-08-15)
 
-**Status:** Active roadmap design — Priority Order #3
+**Status:** Active roadmap design — Priority Order #2
 
 **What:** Two concurrent runs of the *same* agent (e.g. asking the same
 home-assistant agent something from two rooms at once) can race today:
@@ -196,7 +171,7 @@ ids are optional — worth revisiting now that there's a concrete driver.
 
 ### Permission/approval UX for no-terminal contexts (added 2026-08-15)
 
-**Status:** Active roadmap design — Priority Order #4
+**Status:** Active roadmap design — Priority Order #3
 
 **What:** `_permission_prompt`/`_domain_prompt`/`_plan_prompt` (`cli.py`)
 are all synchronous prompts that assume a human at a terminal. Any
@@ -226,10 +201,10 @@ need asking, something else) before or alongside API-boundary work.
 
 **Deep-dive design:** `docs/streaming-plan.md`
 
-**Note (2026-08-15):** reaffirmed as deferred — Priority Order #7, same
+**Note (2026-08-15):** reaffirmed as deferred — Priority Order #6, same
 track as parallel tool-call execution (Track C, below/in the
 Scoped-out-of-MCP backlog), separate from the interface-expansion track
-(Priority Order #3–5). Still no concrete driver.
+(Priority Order #2–4). Still no concrete driver.
 
 ### API / async boundary (added 2026-04-16)
 
@@ -246,7 +221,7 @@ boundary" means thread/process-per-request, not asyncio. No asyncio
 anywhere (boundary or core) is justified without a real high-fan-out
 driver; parallel tool-call execution and parallel sub-agent fan-out are
 the two things that would actually justify it if either gets built at
-real scale. Priority Order #5 — depends on #3 and #4 (concurrency-safety,
+real scale. Priority Order #4 — depends on #2 and #3 (concurrency-safety,
 permission UX) being solved first, since a service layer without either
 is unsafe to expose beyond localhost.
 
@@ -440,7 +415,7 @@ change (`loops/react.py`/`loops/common.py`), not an MCP-client concern —
 built-in tools would benefit exactly as much as MCP ones, so it belongs in
 its own item, not bolted onto this one.
 
-**Note (2026-08-15):** Priority Order #6 — has a concrete driving case (a
+**Note (2026-08-15):** Priority Order #5 — has a concrete driving case (a
 research agent firing multiple fetches per turn) and soft-depends on
 "Permission/approval UX for no-terminal contexts" (Plausible Future
 Capabilities) only if approval-gated tools are involved.
@@ -483,8 +458,8 @@ Possible directions, none decided:
   Worth asking whether reflection's critique phase could borrow that
   concept rather than reinventing verification twice.
 
-**Promoted (2026-08-15):** see "Verified task completion" in Plausible
-Future Capabilities — broadened beyond just `reflection.py` to cover
+**Promoted (2026-08-15), shipped (2026-08-15):** see "Verified task
+completion" in Done — broadened beyond just `reflection.py` to cover
 `ralph.py`/`eval_optimize.py`'s same self-report weakness.
 
 ### Framework comparison
@@ -603,8 +578,8 @@ re-planning" in Plausible Future Capabilities.
 (`_DONE_MARKER`) — a self-report, not a verification. The loop never runs
 the test suite itself and checks the result; it just believes the model.
 Same category of problem as the JSON-fencing discussion — the loop has no
-way to programmatically check its own work. **Promoted (2026-08-15):** see
-"Verified task completion" in Plausible Future Capabilities.
+way to programmatically check its own work. **Promoted (2026-08-15), shipped
+(2026-08-15):** see "Verified task completion" in Done.
 
 **Connects to RAG work already planned:** semantic search over a codebase
 (not just docs) is the same infrastructure as `docs/rag-plan.md`, different
@@ -784,6 +759,20 @@ Agents can now genuinely see images and PDFs, and tools can hand back freshly-ge
 **Storage:** new `agent_dir/tmp/`, cleared once at the start of each run (mirrors `eval/runner.py::_clear_memory`'s existing "fresh state" pattern) — deliberately not session-persisted (`session.py` untouched: a base64 blob surviving into `session.json` would already point at a deleted file on resume, since `tmp/` clears every run).
 
 Verified live, zero mocks, real files, real API calls throughout: a real striped PNG (stdlib-only PNG encoder, no new dependency) viewed via `view_image` against live Anthropic — the model's exact color-and-order description proves genuine visual perception, not a guess (an earlier attempt with a too-small 40×30px test image got the colors wrong even with correctly-attached real image data, confirmed via an isolated raw-API call — a test-image-sizing issue, not a harness bug, fixed by using a larger image); two-image pruning confirmed against a live run (canonical history keeps both, the pruned overlay keeps one); mechanism B confirmed end-to-end via `execute_code` generating real PNG bytes in-process, saved correctly, zero base64 in captured output; graceful degradation confirmed against a real local OpenAI-compatible LM Studio server — both the deterministic Chat-Completions-has-no-PDF-type note and a genuine live provider rejection (`RuntimeError`, not a crash) verified for real.
+
+### Verified task completion (added 2026-08-15, resolved 2026-08-15)
+
+`reflection`/`ralph`/`eval_optimize` now support an optional `completion_check: <string>` config field (default unset — fully inert). When set, a DONE/SCORE-pass claim must also pass this check before the loop stops; on failure the check's own output feeds back to the model and the loop retries, bounded by the loop's existing `max_turns`/`Budget` machinery. Dispatch always goes through the normal tool-call path (`cb.on_tool_call`) — if the string names one of the agent's exposed tools, it's called with no arguments; otherwise it's treated as a shell command and routed through the built-in `run_command` tool. Pass/fail convention: a tool error or `FAIL`-prefixed output fails; a `PASS`-prefixed output or a `[exit code 0]` marker passes; anything else fails closed.
+
+**Two real, pre-existing bugs found and fixed as part of this work, not left as tangential gaps:** (1) `run_command` never read `result.returncode` at all — a failing shell command was indistinguishable from a passing one; fixed by unconditionally appending `[exit code N]` to its output (both on success and failure, not just failure — a nonzero-only trailer would have left a genuinely-passing command with no signal at all under the pass/fail convention above). (2) `ralph.py`'s outer retry loop never checked whether the shared `Budget` was already exceeded before starting another attempt, so it kept burning wasted attempts and re-printing the budget-exceeded message once per attempt — fixed with a new `Budget.is_exceeded()` read-only check, threaded through a new `LoopCallbacks.is_budget_exceeded` callback, checked after every ralph attempt. Independent of `completion_check` — applies to every ralph run.
+
+**User-visible signal, closing a real gap:** `cli.py` previously discarded a loop's return value entirely — nothing distinguished "stopped because verified" from "stopped because budget ran out, unverified" in what the user actually saw. New `LoopCallbacks.on_completion_status(verified, detail)` fires once at the end of a run, only when `completion_check` is configured, wired to a new `display.py::show_completion_status` line (green "Verified complete" / red "NOT verified", mirroring `show_budget`'s shape).
+
+`ralph.py`'s failure-feedback path is a deliberate, scoped softening of its "naive fresh context every attempt" identity: a failed check's output is fed into the *current* attempt (not discarded on a fresh restart) so the model can actually act on it — discarding real failure feedback every time would defeat the point of checking at all. This only applies when `completion_check` is configured; with it unset, behavior is byte-identical to before.
+
+Verified: `pytest tests/unit -q` → 644 passed (up from 588); ruff clean; `mypy --strict` clean (91 files); `radon cc --min D` → none (no D-or-worse anywhere). Real, zero-mock integration test (`tests/integration/test_real_loops.py::TestCompletionCheck`) proves a genuine fail-then-retry-then-pass cycle against the live Anthropic API — a deterministic counter-based checker script fails its first invocation and passes every one after, independent of model behavior, confirming the retry mechanism works end-to-end rather than just in mocked unit tests.
+
+`docs/roadmap.md` Priority Order renumbered (Adaptive re-planning is now #1); `docs/features.md`/`README.md` updated.
 
 ---
 
