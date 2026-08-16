@@ -185,15 +185,14 @@ class TestValidateConfig:
     def test_stream_on_openai_passes(self) -> None:
         validate_config(_valid_config(provider="openai", stream=True))
 
-    def test_stream_on_openai_with_base_url_rejected(self) -> None:
-        with pytest.raises(ValueError, match="stream"):
-            validate_config(
-                _valid_config(
-                    provider="openai",
-                    stream=True,
-                    provider_kwargs={"base_url": "http://localhost:1234/v1"},
-                )
+    def test_stream_on_openai_with_base_url_passes(self) -> None:
+        validate_config(
+            _valid_config(
+                provider="openai",
+                stream=True,
+                provider_kwargs={"base_url": "http://localhost:1234/v1"},
             )
+        )
 
     def test_completion_check_on_unsupported_loop_warns(self, caplog: pytest.LogCaptureFixture) -> None:
         with caplog.at_level("WARNING"):

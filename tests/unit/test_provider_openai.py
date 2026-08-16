@@ -1,5 +1,6 @@
 """Tests for agent_harness.providers.openai_provider."""
 
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import openai
@@ -488,27 +489,6 @@ class TestChat:
         mock_client.responses.create.assert_not_called()
 
     @patch("agent_harness.providers.openai_provider._get_client")
-    def test_stream_on_chat_completions_endpoint_rejected(
-        self, mock_get_client: MagicMock
-    ) -> None:
-        mock_client = MagicMock()
-        mock_get_client.return_value = mock_client
-
-        try:
-            chat(
-                [Message(role="user", content="hi")],
-                tools=[],
-                model="qwen3-4b-thinking-2507",
-                base_url="http://localhost:1234/v1",
-                stream=True,
-            )
-            raise AssertionError("Should have raised")
-        except ValueError as exc:
-            assert "stream" in str(exc).lower()
-        mock_client.responses.stream.assert_not_called()
-        mock_client.chat.completions.create.assert_not_called()
-
-    @patch("agent_harness.providers.openai_provider._get_client")
     def test_auth_error_fails_immediately(self, mock_get_client: MagicMock) -> None:
         mock_client = MagicMock()
         mock_get_client.return_value = mock_client
@@ -602,3 +582,119 @@ class TestChatStreaming:
             stream=True,
         )
         assert result.message.content == "hi"
+
+
+def _cc_chunk(content: str | None = None, tool_calls: list[Any] | None = None) -> MagicMock:
+    delta = MagicMock(content=content, tool_calls=tool_calls)
+    choice = MagicMock(delta=delta)
+    return MagicMock(choices=[choice], usage=None)
+
+
+def _cc_tool_call_delta(index: int, tc_id: str | None, name: str | None, arguments: str | None) -> MagicMock:
+    function = MagicMock(arguments=arguments)
+    function.name = name  # avoid MagicMock(name=...) special-casing the constructor kwarg
+    return MagicMock(index=index, id=tc_id, function=function)
+
+
+class TestChatCompletionsStreaming:
+    @patch("agent_harness.providers.openai_provider._get_client")
+    def test_streams_text_deltas(self, mock_get_client: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+
+        final_chunk = MagicMock(choices=[], usage=MagicMock(prompt_tokens=10, completion_tokens=5))
+        mock_client.chat.completions.create.return_value = iter(
+            [_cc_chunk(content="Hel"), _cc_chunk(content="lo"), final_chunk],
+        )
+
+        received: list[tuple[str, str]] = []
+        result = chat(
+            [Message(role="user", content="hi")],
+            tools=[],
+            model="qwen3-4b-thinking-2507",
+            base_url="http://localhost:1234/v1",
+            stream=True,
+            on_delta=lambda agent_id, chunk: received.append((agent_id, chunk)),
+        )
+
+        assert result.message.content == "Hello"
+        assert received == [("default", "Hel"), ("default", "lo")]
+        assert result.stop_reason == "end_turn"
+        assert result.usage.input_tokens == 10
+        assert result.usage.output_tokens == 5
+        call_kwargs = mock_client.chat.completions.create.call_args.kwargs
+        assert call_kwargs["stream"] is True
+        assert call_kwargs["stream_options"] == {"include_usage": True}
+
+    @patch("agent_harness.providers.openai_provider._get_client")
+    def test_tool_call_arguments_concatenated_across_chunks(self, mock_get_client: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+
+        chunk1 = _cc_chunk(tool_calls=[_cc_tool_call_delta(0, "call_1", "get_weather", '{"loc')])
+        chunk2 = _cc_chunk(tool_calls=[_cc_tool_call_delta(0, None, None, 'ation": "NYC"}')])
+        mock_client.chat.completions.create.return_value = iter([chunk1, chunk2])
+
+        result = chat(
+            [Message(role="user", content="weather in NYC")],
+            tools=[],
+            model="qwen3-4b-thinking-2507",
+            base_url="http://localhost:1234/v1",
+            stream=True,
+        )
+
+        assert result.stop_reason == "tool_use"
+        assert result.message.tool_calls is not None
+        assert len(result.message.tool_calls) == 1
+        tc = result.message.tool_calls[0]
+        assert tc.id == "call_1"
+        assert tc.name == "get_weather"
+        assert tc.arguments == {"location": "NYC"}
+
+    @patch("agent_harness.providers.openai_provider._get_client")
+    def test_multiple_tool_calls_bucketed_by_index(self, mock_get_client: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+
+        chunk1 = _cc_chunk(
+            tool_calls=[
+                _cc_tool_call_delta(0, "call_1", "get_weather", '{"loc": "NYC"}'),
+                _cc_tool_call_delta(1, "call_2", "get_time", '{"tz'),
+            ],
+        )
+        chunk2 = _cc_chunk(tool_calls=[_cc_tool_call_delta(1, None, None, '": "UTC"}')])
+        mock_client.chat.completions.create.return_value = iter([chunk1, chunk2])
+
+        result = chat(
+            [Message(role="user", content="weather and time")],
+            tools=[],
+            model="qwen3-4b-thinking-2507",
+            base_url="http://localhost:1234/v1",
+            stream=True,
+        )
+
+        assert result.message.tool_calls is not None
+        assert len(result.message.tool_calls) == 2
+        first, second = result.message.tool_calls
+        assert first.id == "call_1"
+        assert first.arguments == {"loc": "NYC"}
+        assert second.id == "call_2"
+        assert second.arguments == {"tz": "UTC"}
+
+    @patch("agent_harness.providers.openai_provider._get_client")
+    def test_no_usage_chunk_defaults_to_zero(self, mock_get_client: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        mock_client.chat.completions.create.return_value = iter([_cc_chunk(content="hi")])
+
+        result = chat(
+            [Message(role="user", content="hi")],
+            tools=[],
+            model="qwen3-4b-thinking-2507",
+            base_url="http://localhost:1234/v1",
+            stream=True,
+        )
+
+        assert result.message.content == "hi"
+        assert result.usage.input_tokens == 0
+        assert result.usage.output_tokens == 0

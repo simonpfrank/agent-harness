@@ -13,6 +13,8 @@ from agent_harness.tools import (
     execute_code,
     execute_tool,
     generate_schema,
+    get_current_date,
+    get_current_time,
     list_directory,
     list_provider_models,
     read_file,
@@ -423,6 +425,33 @@ class TestListDirectory:
 
     def test_registered(self) -> None:
         assert "list_directory" in registry
+
+
+class TestGetCurrentDate:
+    def test_includes_todays_date(self) -> None:
+        from datetime import date
+
+        result = get_current_date()
+        assert date.today().isoformat() in result
+
+    def test_includes_weekday_name(self) -> None:
+        weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        result = get_current_date()
+        assert any(day in result for day in weekdays)
+
+    def test_registered(self) -> None:
+        assert "get_current_date" in registry
+
+
+class TestGetCurrentTime:
+    def test_returns_hh_mm_ss(self) -> None:
+        import re
+
+        result = get_current_time()
+        assert re.match(r"^\d{2}:\d{2}:\d{2}", result)
+
+    def test_registered(self) -> None:
+        assert "get_current_time" in registry
 
 
 class TestExecuteToolAttachment:

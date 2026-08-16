@@ -252,11 +252,8 @@ def validate_config(
         raise ValueError(f"Unknown loop: {config.loop}")
     if config.max_turns < 1:
         raise ValueError(f"max_turns must be > 0, got {config.max_turns}")
-    if config.stream:
-        if config.provider not in ("anthropic", "openai"):
-            raise ValueError(f"stream is not supported for provider '{config.provider}'")
-        if config.provider == "openai" and "base_url" in config.provider_kwargs:
-            raise ValueError("stream is not supported for OpenAI Chat Completions (custom base_url) backends")
+    if config.stream and config.provider not in ("anthropic", "openai"):
+        raise ValueError(f"stream is not supported for provider '{config.provider}'")
     if "thinking" in config.provider_kwargs and config.provider != "anthropic":
         raise ValueError(f"thinking is only supported for the anthropic provider, got '{config.provider}'")
     if config.completion_check and config.loop not in ("reflection", "ralph", "eval_optimize"):

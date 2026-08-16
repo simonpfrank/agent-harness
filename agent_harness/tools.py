@@ -11,6 +11,7 @@ import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, get_type_hints
 
@@ -324,6 +325,27 @@ def list_directory(path: str = ".") -> str:
     return "\n".join(lines)
 
 
+def get_current_date() -> str:
+    """Get today's date.
+
+    Models have no inherent notion of the current date — this grounds
+    them rather than letting them guess from training data.
+
+    Returns:
+        Today's local date as "YYYY-MM-DD (Weekday)", e.g. "2026-08-16 (Sunday)".
+    """
+    return datetime.now().astimezone().strftime("%Y-%m-%d (%A)")
+
+
+def get_current_time() -> str:
+    """Get the current time.
+
+    Returns:
+        Current local time as "HH:MM:SS TZ", e.g. "14:32:07 BST".
+    """
+    return datetime.now().astimezone().strftime("%H:%M:%S %Z")
+
+
 def execute_code(code: str, language: str = "python") -> str:
     """Execute a code snippet and return stdout and stderr.
 
@@ -443,6 +465,8 @@ def build_tool_registry(context: ToolRuntimeContext | None = None) -> dict[str, 
         "web_search": web_search,
         "list_provider_models": list_provider_models,
         "list_directory": list_directory,
+        "get_current_date": get_current_date,
+        "get_current_time": get_current_time,
         "execute_code": execute_code_tool,
         "save_memory": save_memory_tool,
         "recall_memory": recall_memory_tool,

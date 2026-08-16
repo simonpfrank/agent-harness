@@ -23,10 +23,17 @@ enough time has passed — it's a snapshot, not a live view.
   Completions for compatibility. `o1`/`o3`/`o4` models explicitly excluded
   (unreliable per `docs/roadmap.md`'s open investigation).
 - **Streaming** — both providers support `stream: true` (token-by-token via
-  `on_delta`/`on_thinking_delta` callbacks). Anthropic: full support. OpenAI:
-  Responses-API models only (`client.responses.stream()`); rejected with a
-  clear error for Chat Completions/`base_url` backends, which aren't wired
-  for it.
+  `on_delta`/`on_thinking_delta` callbacks). Anthropic: full support.
+  OpenAI: both endpoints — hosted models via the Responses API
+  (`client.responses.stream()`) and `base_url` backends (LM Studio,
+  Ollama, vLLM, any OpenAI-compatible server) via Chat Completions
+  (`stream=True` + `stream_options: {"include_usage": true}`). Chat
+  Completions streams tool-call arguments as JSON-string fragments keyed
+  by index (not by call id — only the first fragment for a given index
+  carries `id`/`name`), reassembled by `_stream_chat_completions_deltas`
+  before parsing; `stop_reason` is derived the same way as the
+  non-streaming path (presence of tool calls), not from the API's own
+  `finish_reason`, so streaming and non-streaming behave identically.
 - **Extended thinking** (Anthropic only) — `provider_kwargs.thinking:
   {budget_tokens: N}` enables Claude's extended thinking. Validated
   (budget ≥1024, < max_tokens, incompatible with `temperature`/`top_p`).
@@ -179,6 +186,10 @@ saw.
   `network_exfiltration_blocker` (`api.anthropic.com`/`api.openai.com`).
 - `list_directory`, `run_command` (shell, with timeout), `execute_code`
   (python/bash execution).
+- `get_current_date` / `get_current_time` — the model has no inherent
+  notion of "today," and will otherwise guess from training data (a real,
+  observed failure: a local model assumed "the current year is 2023" on a
+  "what's happening today" prompt). Local time, via `datetime.now().astimezone()`.
 - `save_memory` / `recall_memory` / `list_memories` — see Memory below.
 - `run_agent` — delegate a task to a named sub-agent (see Multi-agent below).
 

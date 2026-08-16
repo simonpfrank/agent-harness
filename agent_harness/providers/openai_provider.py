@@ -392,6 +392,7 @@ def _build_create_kwargs(
     base_url: str | None = None,
     messages: list[Message] | None = None,
     reasoning_effort: str | None = None,
+    stream: bool = False,
 ) -> dict[str, Any]:
     """Build OpenAI request kwargs from the compatibility matrix.
 
@@ -404,6 +405,9 @@ def _build_create_kwargs(
         max_tokens: Optional token limit.
         top_p: Optional nucleus sampling override.
         base_url: Optional custom backend URL.
+        stream: Whether to request streaming. Only affects the Chat
+            Completions branch — Responses-API streaming goes through
+            `client.responses.stream()` directly, not this dict.
 
     Returns:
         Request kwargs for either `responses.create` or
@@ -428,6 +432,9 @@ def _build_create_kwargs(
         api_tools = _to_openai_tools(tools)
         if api_tools:
             create_kwargs["tools"] = api_tools
+        if stream:
+            create_kwargs["stream"] = True
+            create_kwargs["stream_options"] = {"include_usage": True}
         return create_kwargs
 
     create_kwargs = {"model": model, "input": input_items}
@@ -466,6 +473,76 @@ def _stream_responses_deltas(stream: Any, on_delta: Any) -> Response:
     return _to_response(stream.get_final_response())
 
 
+def _merge_tool_call_delta(fragments: dict[int, dict[str, Any]], tc_delta: Any) -> None:
+    """Merge one streamed tool-call delta fragment into its per-index accumulator.
+
+    Chat Completions tool-call deltas are keyed by `index` (stable across
+    chunks for a given call), not by `id` — `id` and `function.name` only
+    appear on the first fragment for that index; `function.arguments`
+    arrives as a JSON-string fragment to be concatenated across chunks.
+
+    Args:
+        fragments: Accumulator keyed by `tc_delta.index`, mutated in place.
+        tc_delta: A single tool-call delta fragment from one chunk.
+    """
+    fragment = fragments.setdefault(tc_delta.index, {"id": None, "name": None, "arguments": ""})
+    if tc_delta.id is not None:
+        fragment["id"] = tc_delta.id
+    if tc_delta.function is not None:
+        if tc_delta.function.name is not None:
+            fragment["name"] = tc_delta.function.name
+        if tc_delta.function.arguments is not None:
+            fragment["arguments"] += tc_delta.function.arguments
+
+
+def _stream_chat_completions_deltas(stream: Any, on_delta: Any) -> Response:
+    """Consume a Chat Completions chunk stream, dispatching text deltas.
+
+    Unlike `client.responses.stream()`, `client.chat.completions.create(
+    stream=True)` returns a plain iterable, not a context manager — callers
+    must not wrap this in a `with` block.
+
+    Args:
+        stream: Iterable of Chat Completions chunks.
+        on_delta: Optional callback for text deltas, `(agent_id, chunk)`.
+
+    Returns:
+        Parsed Response accumulated from the stream's chunks.
+    """
+    content_parts: list[str] = []
+    tool_call_fragments: dict[int, dict[str, Any]] = {}
+    final_chunk: Any = None
+
+    for chunk in stream:
+        if chunk.usage is not None:
+            final_chunk = chunk
+        if not chunk.choices:
+            continue
+        delta = chunk.choices[0].delta
+        if delta.content:
+            content_parts.append(delta.content)
+            if on_delta is not None:
+                on_delta("default", delta.content)
+        for tc_delta in delta.tool_calls or []:
+            _merge_tool_call_delta(tool_call_fragments, tc_delta)
+
+    tool_calls = [
+        ToolCall(
+            id=fragment["id"],
+            name=fragment["name"],
+            arguments=json.loads(fragment["arguments"]) if fragment["arguments"] else {},
+        )
+        for _, fragment in sorted(tool_call_fragments.items())
+    ]
+    message = Message(
+        role="assistant",
+        content="".join(content_parts) or None,
+        tool_calls=tool_calls or None,
+    )
+    stop_reason = "tool_use" if tool_calls else "end_turn"
+    return Response(message=message, usage=_usage_to_internal(final_chunk), stop_reason=stop_reason)
+
+
 def chat(
     messages: list[Message],
     tools: list[dict[str, Any]],
@@ -479,18 +556,18 @@ def chat(
         tools: Tool schemas for function calling.
         model: Model identifier.
         **kwargs: Provider overrides such as `temperature`, `top_p`,
-            `max_tokens`, `base_url`, `api_key`, `stream` (bool, Responses
-            API models only), or `on_delta` (`(agent_id, chunk) -> None`,
-            only used when `stream=True`).
+            `max_tokens`, `base_url`, `api_key`, `stream` (bool), or
+            `on_delta` (`(agent_id, chunk) -> None`, only used when
+            `stream=True`).
 
     Returns:
         Parsed Response with message, usage, and stop reason.
 
     Raises:
-        ValueError: If the hosted OpenAI model is intentionally unsupported,
-            or `stream=True` is requested for a Chat Completions backend.
+        ValueError: If the hosted OpenAI model is intentionally unsupported.
     """
     base_url = kwargs.get("base_url")
+    stream = kwargs.get("stream", False)
     instructions, input_items = _to_openai_input(messages)
     create_kwargs = _build_create_kwargs(
         model=model,
@@ -503,19 +580,18 @@ def chat(
         base_url=base_url,
         messages=messages,
         reasoning_effort=kwargs.get("reasoning_effort"),
+        stream=stream,
     )
     endpoint = _response_endpoint_for_model(model, base_url=base_url)
     client = _get_client(base_url=base_url, api_key=kwargs.get("api_key"))
-
-    stream = kwargs.get("stream", False)
-    if stream and endpoint == "chat_completions":
-        raise ValueError(
-            "stream is not supported for Chat Completions (custom base_url) backends"
-        )
     on_delta = kwargs.get("on_delta")
 
     def _call() -> Response:
         if endpoint == "chat_completions":
+            if stream:
+                return _stream_chat_completions_deltas(
+                    client.chat.completions.create(**create_kwargs), on_delta
+                )
             return _to_response(client.chat.completions.create(**create_kwargs))
         if stream:
             with client.responses.stream(**create_kwargs) as response_stream:

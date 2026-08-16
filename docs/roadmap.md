@@ -268,6 +268,23 @@ prompt today.
 decision (push-notify-and-wait, network-scoped tool allowlists that never
 need asking, something else) before or alongside API-boundary work.
 
+**Real evidence, not hypothetical (found 2026-08-16):** live-testing the
+`researcher` agent against a local LM Studio model with `--stream` hit an
+unhandled `EOFError` crash — `_domain_prompt` (`cli.py`) called
+`_console.input(...)` while stdin wasn't a live TTY, and the raw
+`EOFError` propagated all the way up through `hooks.py`/`runtime.py`/
+`react.py` with no handling anywhere in that chain, killing the whole
+process. Narrower than this item's main "no terminal at all" design
+question — this is CLI-mode prompts crashing raw instead of failing
+gracefully whenever stdin isn't interactive (piped, redirected,
+non-interactive automation), not just the "genuinely no terminal exists"
+case. Worth fixing as part of this item's eventual work (catch `EOFError`
+in `_permission_prompt`/`_domain_prompt`/`_plan_prompt`, default to deny
+with a clear message instead of an unhandled traceback) rather than
+separately — same root cause (prompts assume a live interactive human),
+same fix location. Deliberately not fixed standalone now — logged here to
+land alongside the interface work per the user's explicit call.
+
 ### Parallel sub-agent fan-out (added 2026-04-16)
 
 **Status:** Active roadmap design
@@ -516,6 +533,18 @@ bigger, cross-cutting change not needed to solve the actual problem
 ## Ideas
 
 These are captured so they are not lost. They are not commitments.
+
+### Split openai_provider.py (added 2026-08-16)
+
+`providers/openai_provider.py` is ~600 lines, well past the 500-line
+guideline, driven by hosting two full endpoint implementations
+(Responses + Chat Completions, both streaming and non-streaming) in one
+module. Deferred deliberately when Chat Completions streaming was added
+(2026-08-16) — user asked to get streaming working now, not split the
+file mid-feature. Natural seam if/when this gets done: `openai_responses.py`
+/ `openai_chat_completions.py` behind the existing single `chat()` entry
+point in `openai_provider.py`, so nothing outside this module needs to
+change. Not urgent — file is still readable, just long.
 
 ### Refining the reflection loop (added 2026-08-05)
 

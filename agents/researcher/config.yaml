@@ -1,8 +1,9 @@
-name: hello-local
+name: researcher
 provider: openai
 model: qwen/qwen3-4b-thinking-2507
-tools: [run_command, read_file, execute_code]
-max_turns: 10
+tools: [web_search, web_fetch, write_file, get_current_date, get_current_time]
+loop: react
+max_turns: 25
 max_cost: 1.00
 provider_kwargs:
   base_url: "http://localhost:1234/v1"
