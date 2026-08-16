@@ -107,7 +107,8 @@ class TestOnBudget:
         assert cb.on_budget is not None
         exceeded = cb.on_budget(Usage(10, 5))
         assert exceeded is False
-        mock_show_budget.assert_called_once_with("Turn 3/15 | $0.05/$0.30")
+        shown = mock_show_budget.call_args.args[0]
+        assert "Turn 3/15 | $0.05/$0.30" in shown
 
     @patch("agent_harness.runtime.show_budget")
     def test_flags_stop_when_exceeded(self, mock_show_budget: MagicMock) -> None:
@@ -124,6 +125,33 @@ class TestOnBudget:
         shown = mock_show_budget.call_args.args[0]
         assert "Turn 15/15 | $0.2372/$0.30" in shown
         assert "stopping" in shown.lower()
+
+    @patch("agent_harness.runtime.show_budget")
+    def test_includes_token_counts_in_k(self, mock_show_budget: MagicMock) -> None:
+        budget = MagicMock()
+        budget.record.return_value = False
+        budget.summary.return_value = "Turn 1/15 | $0.00/$0.30"
+        cb = _make_callbacks(
+            budget=budget, hooks=MagicMock(), permissions=MagicMock(), tracer=MagicMock(),
+            tool_registry={}, max_output_chars=10_000, show_output=True,
+        )
+        assert cb.on_budget is not None
+        cb.on_budget(Usage(2130, 346))
+        shown = mock_show_budget.call_args.args[0]
+        assert "2.1k in" in shown
+        assert "0.3k out" in shown
+
+    @patch("agent_harness.runtime.show_budget")
+    def test_no_token_counts_when_show_output_false(self, mock_show_budget: MagicMock) -> None:
+        budget = MagicMock()
+        budget.record.return_value = False
+        cb = _make_callbacks(
+            budget=budget, hooks=MagicMock(), permissions=MagicMock(), tracer=MagicMock(),
+            tool_registry={}, max_output_chars=10_000, show_output=False,
+        )
+        assert cb.on_budget is not None
+        cb.on_budget(Usage(2130, 346))
+        mock_show_budget.assert_not_called()
 
 
 class TestGetBudgetStatus:

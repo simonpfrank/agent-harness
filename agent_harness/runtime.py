@@ -336,6 +336,7 @@ def _make_callbacks(
         exceeded = budget.record(usage)
         if show_output:
             summary = budget.summary()
+            summary += f" | {usage.input_tokens / 1000:.1f}k in / {usage.output_tokens / 1000:.1f}k out"
             if exceeded:
                 summary += " — stopping (budget limit reached, task may be incomplete)"
             show_budget(summary)

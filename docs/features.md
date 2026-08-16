@@ -55,7 +55,11 @@ enough time has passed — it's a snapshot, not a live view.
   `.turns`/`.total_cost` properties and a `status_note()` ("You have N
   turn(s) remaining...") injected into the system prompt each turn via a
   disposable overlay — the persisted system message itself is never
-  mutated.
+  mutated. The per-turn console line also shows real input/output token
+  counts in k (`Turn 3/25 | $0.0000/$1.00 | 2.1k in / 0.3k out`) — genuine
+  `response.usage` figures, not estimated — added specifically to help
+  compare local-model settings (context size, quantization) where cost
+  tracking alone is inert ($0 for any model absent from `MODEL_REGISTRY`).
 - **Context trimming** (`context.py`) — per-model context-window limits;
   `trim_messages` drops oldest non-system messages once usage crosses 80%
   of the limit, always preserving the system message and most recent turns.

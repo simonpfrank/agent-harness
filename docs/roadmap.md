@@ -534,6 +534,74 @@ bigger, cross-cutting change not needed to solve the actual problem
 
 These are captured so they are not lost. They are not commitments.
 
+### Provider-tier strategy: cloud direct / OpenRouter / HF-hosted / local (added 2026-08-16)
+
+**What:** Not yet a feature — a real, unresolved question the user flagged
+explicitly needs thinking through before any of it gets designed: how the
+harness should reason about (and possibly help choose between) four
+genuinely different provider tiers — cloud-direct (Anthropic/OpenAI as
+already built), OpenRouter, Hugging-Face-hosted inference, and local
+(LM Studio/Ollama/llama.cpp). "Becoming a complex map of managing
+providers per message levels" — the user's own framing, kept verbatim
+since it names the actual concern precisely.
+
+**Why now, not resolved now:** driven by real, current experience —
+tuning a local model (LM Studio + qwen3) well enough that it doesn't
+"waffle on" (burn hundreds of tokens reasoning in circles before ever
+acting, observed for real this session) turns out to depend heavily on
+which local runtime and settings are used, and that variability doesn't
+exist the same way for cloud-direct providers at all. Explicit goal
+named: get this right *before* pointing a Reachy Mini agent at a local
+model, where a "waffling" failure mode is a much worse user experience
+than in a CLI session.
+
+**Real, verified research from this session, worth keeping rather than
+re-deriving:**
+- **Ollama** supports per-request `num_ctx` (context size) *and* a
+  working per-request `think` level (boolean or low/medium/high/max,
+  model-dependent) — confirmed via Ollama's own docs
+  (`docs.ollama.com/capabilities/thinking`), genuinely more tunable
+  per-request than LM Studio for exactly this use case.
+- **llama.cpp server**'s `--ctx-size`/`-c` is a server-*launch* flag only
+  (shared unified KV cache across parallel slots) — no per-request
+  context control, and no confirmed per-request thinking-level toggle
+  either (not confirmed absent, just not found).
+- **LM Studio**: context is load-time only (`POST /api/v1/models/load`);
+  `reasoning_effort` per chat-completions request is confirmed **broken**
+  upstream (open bug, lmstudio-ai/lmstudio-bug-tracker#988 — the
+  UI-configured value always wins regardless of what the API request
+  sends). Its native `/api/v1/models` endpoint *is* good for read-only
+  visibility (real `max_context_length`/loaded `context_length`/reasoning
+  capability options), just not for setting anything per-request.
+- **Apple Silicon MLX vs GGUF speed** is genuinely nuanced, not a flat
+  "MLX always wins": meaningfully faster for models under ~14B, but the
+  gap mostly closes for ~27-32B-class models (the user's actual
+  `qwen3.8-27b`), and at 30K+ context tokens MLX can become *slower* than
+  llama.cpp with FlashAttention — i.e. shrinking context favors MLX,
+  giving it more context favors GGUF/llama.cpp. Treat exact percentages
+  from web benchmarks loosely (sources disagreed on magnitude); the
+  *direction* and the long-context crossover are the load-bearing facts.
+- **Format portability, concrete constraint on the user's own two
+  models:** `qwen3.8-27b` (GGUF) runs on LM Studio/Ollama/llama.cpp;
+  `qwen3-4b-thinking` (MLX format) only runs on MLX-capable runtimes
+  (LM Studio's MLX engine, or Apple's own `mlx-lm`) — Ollama's brand-new
+  MLX support is a narrow preview tied to one specific NVFP4-quantized
+  model, unrelated to either of the user's actual models.
+- **Cloud providers checked directly against this harness's own code, not
+  assumed:** Anthropic's `thinking: {budget_tokens}` and OpenAI's
+  `reasoning_effort` are both already fully implemented and functional
+  (`anthropic.py`/`openai_provider.py`) — nothing missing there. Context
+  isn't a per-request lever for cloud models at all (fixed per model), so
+  there's no equivalent gap to close on that side.
+
+**Scope in roadmap terms:** not designed, not scoped — needs a real
+thinking-through session before it becomes a buildable item, per the
+user's own explicit framing. Possible shape, not decided: some kind of
+per-agent or per-provider-tier settings profile, informed by which
+capabilities (context control, working reasoning-level control) are
+actually real for the tier in use, rather than assuming uniform
+capability across all of them the way `provider_kwargs` currently does.
+
 ### Split openai_provider.py (added 2026-08-16)
 
 `providers/openai_provider.py` is ~600 lines, well past the 500-line
