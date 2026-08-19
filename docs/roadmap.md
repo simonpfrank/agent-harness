@@ -10,17 +10,16 @@ When an item ships, move it to the **Done** section at the bottom with a commit 
 
 Ranked list of everything currently committed to build (drawn from `Near-term Improvements` and `Plausible Future Capabilities` below — `Ideas`/`Scoped out`/`Rejected` stay unranked, not commitments). Ranking logic: quick wins first, then dependency order within a track. See each item's own detail section for the *why*.
 
-**Track A — Agent capability/correctness** (no dependency on Track B; sequenced first per 2026-08-15 discussion — don't scale exposure to a still-unverified core before fixing the core):
-1. Adaptive re-planning — builds on the thrashing breaker's escalation signal (shipped, see Done)
+**Track A — Interface/access expansion** (multi-device, multi-task future — Echo/phone/Reachy, not just CLI):
+1. Concurrency-safety for per-agent-dir state — cheap, not gated on the rest of this track, can go anytime
+2. Permission/approval UX for no-terminal contexts — also covers plan-approval's (`_plan_prompt`) identical fragility, and the real `EOFError` crash hit live-testing (2026-08-16)
+3. API / async boundary (thin sync/threaded wrapper — not an asyncio core rewrite)
 
-**Track B — Interface/access expansion** (multi-device, multi-task future — Echo/phone/Reachy, not just CLI):
-2. Concurrency-safety for per-agent-dir state — cheap, not actually gated on the rest of this track, can go anytime
-3. Permission/approval UX for no-terminal contexts — also covers plan-approval's (`_plan_prompt`) identical fragility
-4. API / async boundary (thin sync/threaded wrapper — not an asyncio core rewrite)
+**Track B — Single-task execution speed/quality** (separate from A — not about interfaces, about how well one task executes; soft-depends on Track A #2 only if approval-gated tools are involved):
+4. Parallel tool-call execution within a turn — has a concrete driving case (a research agent firing multiple fetches per turn)
+5. Parallel sub-agent fan-out — still no concrete driver, stays deferred
 
-**Track C — Single-task execution speed/quality** (separate from A and B — not about interfaces, about how well one task executes; soft-depends on Track B #3 only if approval-gated tools are involved):
-5. Parallel tool-call execution within a turn — has a concrete driving case (a research agent firing multiple fetches per turn)
-6. Parallel sub-agent fan-out — still no concrete driver, stays deferred
+**Shelved (2026-08-19), not in this ranking:** Adaptive re-planning — a full design exists (see Ideas below) but was pulled *during* plan mode when a direct check found zero example agents actually use `loop: plan_execute` yet. Investing in adaptation logic for an unused code path is exactly the "no code-level tweaks without hard evidence" mistake this project already corrected once (the prompt-override-file retraction). Next step before this returns to Priority Order: build and actually run a real `plan_execute`-based agent, see if the static-plan limitation genuinely bites.
 
 **Deprioritized, no pressing need (2026-08-15):** CLI REPL single-keypress prompts, CLI REPL `#` type-ahead tool invocation — left scoped below for whenever a real need surfaces. `!` prefix for inline shell stays as an optional quick win, not urgent.
 
@@ -134,104 +133,9 @@ which input mechanism is chosen.
 
 Not part of the sequence: **API/async boundary** is a standing design constraint ("if an API is ever added, keep async at the boundary"), not a buildable task — it activates only if something else creates a reason for an external API; conceptually the same "async phase" bucket as parallel fan-out above. **Lazy tool schema loading** doesn't clear this file's own benefit-vs-complexity bar (see its entry below) and isn't scheduled.
 
-### Adaptive re-planning (added 2026-08-15)
-
-**Status:** Active roadmap design — Priority Order #1, built on the
-step-level tool-call thrashing breaker (shipped, see Done) as its trigger
-
-**Tunability discipline, settled 2026-08-15, applies here too:** every
-threshold this ends up needing is a `config.yaml` field with a sensible
-default, same low-friction pattern as `completion_check`/`max_turns`/
-`thrash_threshold` — no code change needed to retune once live. Any
-internal prompt this needs (e.g. an escalation critique) starts as a
-plain hardcoded constant, same convention as `reflection.py`'s
-`_CRITIQUE_PROMPT` — **no agent-local prompt-override file or other
-tuning convention gets built speculatively.** That was raised and
-retracted the same session it was suggested for the thrashing breaker:
-premature infrastructure for a prompt that doesn't exist yet, before any
-trace has shown the default wording is actually a problem — same logic
-applies here. If tuning it later turns out to be genuinely needed, adding
-an override then costs nothing extra. Use `trace.py`'s structured JSONL
-(log the actual reasoning content at each escalation, not just a
-boolean) to detect problems empirically, and the existing `eval/`
-framework (cells + leaderboard) to A/B threshold or prompt changes — both
-already exist, building a separate experimentation system for this would
-be duplicate functionality. Code-level tweaks only follow hard evidence
-from those, never speculation.
-
-**What:** `plan_execute.py` plans once, does at most 2 critique/refine
-rounds on the plan *text* before execution starts, then commits —
-nothing re-plans mid-execution if a step reveals the original plan's
-premise was wrong.
-
-**Why:** Promoted from "What a decent coding agent would need" (Ideas,
-below) — a static plan is a real ceiling for open-ended tasks where
-surprises are the norm, and this is core single-agent capability,
-independent of any interface/concurrency work.
-
-**Scope in roadmap terms:** not designed yet, but a real design discussion
-(2026-08-15) settled several things worth preserving before this gets
-built, not re-derived from scratch:
-
-- **Trigger is the thrashing breaker above, not "any tool error."** A
-  tool error alone means "still executing," not "needs replanning" — most
-  errors (wrong ID, wrong operand, a bad search term) are tool-use
-  corrections that converge within the breaker's own retry budget with no
-  plan involvement at all. Only budget-exhaustion escalates here. This
-  keeps the (expensive) plan-level critique call rare rather than firing
-  on every tool hiccup.
-- **The escalation call needs three possible outputs, not one.** Framing
-  it as "always produces a revised plan" is wrong — often the right
-  answer is "plan's fine, retry this step with a nudge, no structural
-  change" (the common case when a step is merely thrashing, not actually
-  broken), or "swap this one step's approach, rest of the plan untouched"
-  (local fix), or, rarer, "this changes what comes after" (real
-  restructure). Forcing a plan revision every time this fires would make
-  the cure worse than the disease.
-- **Revise minimally, not by full regeneration.** When a real revision is
-  needed, ask for the smallest change that addresses the failure, not a
-  wholesale rewrite of the remaining plan — smaller diffs are inherently
-  lower-risk, and there's no way to *guarantee* a revision is actually
-  better before it executes (true of any adaptive system), so bounding
-  blast radius matters more than trying to perfect the revision.
-- **A circuit breaker on repeated escalation, on top of the thrashing
-  breaker.** If escalation fires again shortly after the last one (not
-  just "N total escalations" but "escalated twice in a row without
-  converging"), that's a stronger thrashing-at-the-plan-level signal —
-  stop and **hand back to the human** via the existing plan-approval gate
-  rather than silently keep revising. Confirmed with the user: hand-back,
-  not auto-stop — this will likely also need better prompting on the
-  escalation call itself, flagged as a follow-up, not solved by the
-  breaker alone.
-- **Detecting a *successful* tool result that's still wrong for this
-  stage of the plan is a separate, harder problem than detecting tool
-  errors** — worth designing in from the start rather than assuming the
-  breaker above covers it (it doesn't; no error occurs in this case, so
-  the breaker never fires). Two genuinely different failure shapes:
-  - *The tool's answer is factually wrong* (stale data, wrong match,
-    tool-side mistake) — this generally has no general solution without
-    either ground truth or a domain-specific verification tool for that
-    step (the same optional-hook idea as `completion_check`, applied per
-    step instead of per whole-run). Be honest that this is a fundamental
-    limit, not a gap to promise away.
-  - *The tool's answer is correct but doesn't match what the plan
-    assumed* (e.g. plan expected JSON, tool correctly reports it's CSV)
-    — this is much more tractable: have plan generation state each step's
-    *expected* shape/type/rough bounds as part of the plan text itself,
-    then check the actual result against that stated expectation before
-    proceeding. This is a structural mismatch check, not a truth-verification
-    check, so it doesn't require ground truth — and stating the
-    expectation *before* seeing the result avoids the model just
-    rationalizing whatever came back after the fact.
-  - Absent either mechanism, wrongness often (not reliably) surfaces
-    later when a downstream step tries to consume a bad value and
-    something breaks or looks absurd — a weak, late safety net, not a
-    design to rely on; by the time it surfaces, especially near the end
-    of a plan, damage may already be done.
-
 ### Concurrency-safety for per-agent-dir state (added 2026-08-15)
 
-**Status:** Active roadmap design — Priority Order #2
+**Status:** Active roadmap design — Priority Order #1
 
 **What:** Two concurrent runs of the *same* agent (e.g. asking the same
 home-assistant agent something from two rooms at once) can race today:
@@ -250,7 +154,7 @@ ids are optional — worth revisiting now that there's a concrete driver.
 
 ### Permission/approval UX for no-terminal contexts (added 2026-08-15)
 
-**Status:** Active roadmap design — Priority Order #3
+**Status:** Active roadmap design — Priority Order #2
 
 **What:** `_permission_prompt`/`_domain_prompt`/`_plan_prompt` (`cli.py`)
 are all synchronous prompts that assume a human at a terminal. Any
@@ -297,10 +201,10 @@ land alongside the interface work per the user's explicit call.
 
 **Deep-dive design:** `docs/streaming-plan.md`
 
-**Note (2026-08-15):** reaffirmed as deferred — Priority Order #6, same
-track as parallel tool-call execution (Track C, below/in the
+**Note (2026-08-15):** reaffirmed as deferred — Priority Order #5, same
+track as parallel tool-call execution (Track B, below/in the
 Scoped-out-of-MCP backlog), separate from the interface-expansion track
-(Priority Order #2–4). Still no concrete driver.
+(Priority Order #1–3). Still no concrete driver.
 
 ### API / async boundary (added 2026-04-16)
 
@@ -317,7 +221,7 @@ boundary" means thread/process-per-request, not asyncio. No asyncio
 anywhere (boundary or core) is justified without a real high-fan-out
 driver; parallel tool-call execution and parallel sub-agent fan-out are
 the two things that would actually justify it if either gets built at
-real scale. Priority Order #4 — depends on #2 and #3 (concurrency-safety,
+real scale. Priority Order #3 — depends on #1 and #2 (concurrency-safety,
 permission UX) being solved first, since a service layer without either
 is unsafe to expose beyond localhost.
 
@@ -511,7 +415,7 @@ change (`loops/react.py`/`loops/common.py`), not an MCP-client concern —
 built-in tools would benefit exactly as much as MCP ones, so it belongs in
 its own item, not bolted onto this one.
 
-**Note (2026-08-15):** Priority Order #5 — has a concrete driving case (a
+**Note (2026-08-15):** Priority Order #4 — has a concrete driving case (a
 research agent firing multiple fetches per turn) and soft-depends on
 "Permission/approval UX for no-terminal contexts" (Plausible Future
 Capabilities) only if approval-gated tools are involved.
@@ -533,6 +437,99 @@ bigger, cross-cutting change not needed to solve the actual problem
 ## Ideas
 
 These are captured so they are not lost. They are not commitments.
+
+### Adaptive re-planning (design settled 2026-08-15, shelved 2026-08-19)
+
+**Shelved mid-plan-mode, not abandoned — a real design exists, just not
+enough evidence yet to justify building it.** `plan_execute.py` plans
+once, does a bounded pre-execution critique/refine round on the plan
+*text*, then commits — nothing re-plans mid-execution if a step reveals
+the plan's premise was wrong. A full implementation plan was produced
+(retry-wrapped step execution mirroring `ralph.py::_run_attempt`, a
+3-outcome LLM-judged escalation classifier, a circuit breaker reusing the
+existing plan-approval gate for hand-back) — but a direct check mid-plan
+found **zero example agents in this project actually use
+`loop: plan_execute`**. Building adaptation logic for a code path with no
+real users would repeat the exact mistake this roadmap already caught and
+reversed once (the prompt-override-file retraction for the thrashing
+breaker) — "no code-level tweaks without hard evidence," just at a much
+larger scale (six new functions, a full `plan_execute.py` execution-loop
+restructure, cross-step circuit-breaker state). Caught by the user's own
+instinct mid-session, verified rather than just accepted.
+
+**Next step before this returns to Priority Order:** build and actually
+run a real `plan_execute`-based agent for a task genuinely suited to
+upfront step planning, and watch what happens. If the static-plan
+limitation never bites, this was never needed — a correct outcome, not a
+failure to revisit. If it does bite, there'll be real evidence to design
+against instead of a prior-project anecdote.
+
+**First real data point (2026-08-19), and it argues against building
+this, not for it.** Built `agents/competitor-research` (`loop:
+plan_execute`, same local LM Studio model as `agents/researcher`) and ran
+it live: "compare Slack, Microsoft Teams, and Discord." Plan generation
+produced exactly one step per competitor; critique approved immediately;
+all 3 steps executed cleanly — no thrashing, no tool errors, no
+escalation-worthy event of any kind — and the final summary was accurate
+and properly sourced for all three. One genuinely interesting wrinkle:
+mid-way through step 1, the model prematurely declared "I've completed
+the research on all three" despite having only searched Slack — a
+hallucinated early completion, not thrashing. It didn't derail anything,
+because `plan_execute.py`'s Phase 2 loop doesn't read or trust that
+self-report at all — it just executes the fixed step list regardless of
+what any step's text claims. The rigidity this feature would relax turned
+out to be a *strength* in this run, not a limitation — the same "don't
+trust self-report, use structure instead" principle already behind
+`completion_check` and the thrash guard, arrived at organically rather
+than designed in. One real run isn't proof this is never needed, but it's
+a genuine first data point, and it points toward "not yet," not "here's
+the evidence to build against."
+
+**Design, preserved for if/when real evidence justifies building it:**
+- **Trigger**: not "any tool error" (that's normal react-loop
+  self-correction) — only when a step shows *persistent* thrashing, i.e.
+  the step-level thrashing breaker's `on_thrash_detected` fires more than
+  once during one step's `react_run` call. Concretely wireable without
+  any new signal from `react.py`/`common.py`: `plan_execute.py` can count
+  firings by building a per-step `LoopCallbacks` wrapper
+  (`dataclasses.replace(cb, on_thrash_detected=counting_wrapper)`) that
+  delegates to the original callback so display/tracing still happens.
+- **The escalation call needs three possible outputs, not one**: (a) no
+  change, retry the step with a nudge (the common case); (b) swap this
+  one step's approach, rest of the plan untouched (local fix); (c) a real
+  structural revision affecting later steps too (rarer). Forcing a plan
+  revision every time this fires would make the cure worse than the
+  disease.
+- **Revise minimally, not by full regeneration** — smaller diffs are
+  lower-risk, and there's no way to *guarantee* a revision is better
+  before it executes.
+- **Circuit breaker**: escalating twice in a row *without an intervening
+  step that converged cleanly* (not just "N total escalations") hands
+  back to the human via the *existing* `cb.on_plan_approval` gate, not a
+  new stop pathway — fails safe (stop with a clear message, don't loop
+  forever) if no approval callback is wired, matching the initial
+  plan-approval gate's own inert-by-default convention.
+- **Structural fix required first**: today `plan_execute.py` has no
+  retry/success concept at all — once `react_run` returns for a step, the
+  loop just moves on regardless of outcome. Needs a `ralph.py`-style
+  bounded per-step retry wrapper before any escalation logic can sit on
+  top of it.
+- **Config-field precedent to follow when built**: `replan_escalation_threshold`
+  (firings within one step before escalating, not the same as
+  `thrash_threshold` which governs when the nudge itself fires) and
+  `replan_circuit_breaker_threshold` (consecutive escalations before
+  hand-back) — both `int` fields with sensible defaults, same low-friction
+  pattern as `completion_check`/`thrash_threshold`, no hardcoded magic
+  numbers.
+- **Explicitly out of scope even if this gets built**: the idea of plan
+  generation stating each step's *expected* result shape (so a
+  successful-but-wrong tool result can be caught structurally, not just
+  errors) is a separate, larger follow-on — it touches plan *generation*
+  itself, not just execution, and deserves its own build cycle. Detecting
+  a tool result that's factually wrong (vs. merely mismatched from what
+  the plan expected) has no general solution without ground truth or a
+  domain-specific check — be honest that's a fundamental limit, not a gap
+  to promise away.
 
 ### Provider-tier strategy: cloud direct / OpenRouter / HF-hosted / local (added 2026-08-16)
 

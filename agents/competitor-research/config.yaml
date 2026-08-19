@@ -1,0 +1,9 @@
+name: competitor-research
+provider: openai
+model: nvidia/nemotron-3-nano-4b
+tools: [web_search, web_fetch, write_file, get_current_date, get_current_time]
+loop: plan_execute
+max_turns: 15
+max_cost: 1.00
+provider_kwargs:
+  base_url: "http://localhost:1234/v1"
