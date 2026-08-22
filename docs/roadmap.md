@@ -11,13 +11,12 @@ When an item ships, move it to the **Done** section at the bottom with a commit 
 Ranked list of everything currently committed to build (drawn from `Near-term Improvements` and `Plausible Future Capabilities` below — `Ideas`/`Scoped out`/`Rejected` stay unranked, not commitments). Ranking logic: quick wins first, then dependency order within a track. See each item's own detail section for the *why*.
 
 **Track A — Interface/access expansion** (multi-device, multi-task future — Echo/phone/Reachy, not just CLI):
-1. Concurrency-safety for per-agent-dir state — cheap, not gated on the rest of this track, can go anytime
-2. Permission/approval UX for no-terminal contexts — also covers plan-approval's (`_plan_prompt`) identical fragility, and the real `EOFError` crash hit live-testing (2026-08-16)
-3. API / async boundary (thin sync/threaded wrapper — not an asyncio core rewrite)
+1. Permission/approval UX for no-terminal contexts — also covers plan-approval's (`_plan_prompt`) identical fragility, and the real `EOFError` crash hit live-testing (2026-08-16)
+2. API / async boundary (thin sync/threaded wrapper — not an asyncio core rewrite)
 
-**Track B — Single-task execution speed/quality** (separate from A — not about interfaces, about how well one task executes; soft-depends on Track A #2 only if approval-gated tools are involved):
-4. Parallel tool-call execution within a turn — has a concrete driving case (a research agent firing multiple fetches per turn)
-5. Parallel sub-agent fan-out — still no concrete driver, stays deferred
+**Track B — Single-task execution speed/quality** (separate from A — not about interfaces, about how well one task executes; soft-depends on Track A #1 only if approval-gated tools are involved):
+3. Parallel tool-call execution within a turn — has a concrete driving case (a research agent firing multiple fetches per turn)
+4. Parallel sub-agent fan-out — still no concrete driver, stays deferred
 
 **Shelved (2026-08-19), not in this ranking:** Adaptive re-planning — a full design exists (see Ideas below) but was pulled *during* plan mode when a direct check found zero example agents actually use `loop: plan_execute` yet. Investing in adaptation logic for an unused code path is exactly the "no code-level tweaks without hard evidence" mistake this project already corrected once (the prompt-override-file retraction). Next step before this returns to Priority Order: build and actually run a real `plan_execute`-based agent, see if the static-plan limitation genuinely bites.
 
@@ -133,28 +132,9 @@ which input mechanism is chosen.
 
 Not part of the sequence: **API/async boundary** is a standing design constraint ("if an API is ever added, keep async at the boundary"), not a buildable task — it activates only if something else creates a reason for an external API; conceptually the same "async phase" bucket as parallel fan-out above. **Lazy tool schema loading** doesn't clear this file's own benefit-vs-complexity bar (see its entry below) and isn't scheduled.
 
-### Concurrency-safety for per-agent-dir state (added 2026-08-15)
-
-**Status:** Active roadmap design — Priority Order #1
-
-**What:** Two concurrent runs of the *same* agent (e.g. asking the same
-home-assistant agent something from two rooms at once) can race today:
-`runtime.py::prepare_runtime` clears `agent_dir/tmp/` at the start of
-every run, and memory/session file writes aren't lock-protected.
-
-**Why:** Real prerequisite for any multi-interface access story (API,
-voice, Reachy) to work reliably — independent of whichever concurrency
-model (threads, processes, eventually async) ends up serving requests.
-Ties back to an earlier, since-shelved discussion about giving each
-session its own `tmp/` subfolder, bailed on at the time because session
-ids are optional — worth revisiting now that there's a concrete driver.
-
-**Scope in roadmap terms:** not designed yet — likely touches
-`runtime.py::prepare_runtime`, `memory.py`, `session.py`.
-
 ### Permission/approval UX for no-terminal contexts (added 2026-08-15)
 
-**Status:** Active roadmap design — Priority Order #2
+**Status:** Active roadmap design — Priority Order #1
 
 **What:** `_permission_prompt`/`_domain_prompt`/`_plan_prompt` (`cli.py`)
 are all synchronous prompts that assume a human at a terminal. Any
@@ -201,10 +181,10 @@ land alongside the interface work per the user's explicit call.
 
 **Deep-dive design:** `docs/streaming-plan.md`
 
-**Note (2026-08-15):** reaffirmed as deferred — Priority Order #5, same
+**Note (2026-08-15):** reaffirmed as deferred — Priority Order #4, same
 track as parallel tool-call execution (Track B, below/in the
 Scoped-out-of-MCP backlog), separate from the interface-expansion track
-(Priority Order #1–3). Still no concrete driver.
+(Priority Order #1–2). Still no concrete driver.
 
 ### API / async boundary (added 2026-04-16)
 
@@ -221,9 +201,10 @@ boundary" means thread/process-per-request, not asyncio. No asyncio
 anywhere (boundary or core) is justified without a real high-fan-out
 driver; parallel tool-call execution and parallel sub-agent fan-out are
 the two things that would actually justify it if either gets built at
-real scale. Priority Order #3 — depends on #1 and #2 (concurrency-safety,
-permission UX) being solved first, since a service layer without either
-is unsafe to expose beyond localhost.
+real scale. Priority Order #2 — depends on #1 (permission UX) and on
+concurrency-safety for per-agent-dir state (shipped 2026-08-19, see Done
+below) being solved first, since a service layer without either is
+unsafe to expose beyond localhost.
 
 **Note (2026-08-15), trigger-driven vs. request-response:** not every
 future caller is a human waiting live on the other end. A home-assistant
@@ -236,6 +217,37 @@ waiting), worth designing for from the start rather than assuming every
 request has an impatient human on the other end.
 
 **Deep-dive design:** `docs/streaming-plan.md`
+
+**Note (2026-08-19), real driver and its actual scope, clarified through
+discussion — don't build past this:** the concrete driver is now real —
+a separately-built web chat UI (not part of this repo), eventually
+Reachy Mini, possibly an Echo-via-AWS-Lambda proxy, all talking to
+whatever API this item builds; harness deployment location is flexible
+(Reachy's own Pi, a spare Pi 5, an always-on iMac, or a laptop
+temporarily for local-model serving). Initially escalated this to "needs
+real auth from day one" reasoning from the Echo/Lambda case (an
+internet-facing endpoint running `run_command`/`execute_code` with no
+auth is a genuine risk) — **corrected by the user**: current actual usage
+is home-LAN-reachable or, at work, local-to-one-machine only, not
+internet-facing — Echo/Lambda is a "one day might," not a current
+requirement, and building full auth (OAuth, token issuance/rotation,
+accounts) for a threat model that doesn't exist yet would repeat this
+project's own "no code-level tweaks without hard evidence" mistake, just
+applied to security infra instead of a feature.
+
+**Settled, right-sized shape:** a single shared-secret/API-key check (one
+header compared against a configured value) — genuinely cheap, and
+proportionate to the *real* current exposure: "LAN-reachable" already
+means more than just the user (other devices on a home network, other
+machines on an office network), so an unauthenticated endpoint isn't
+actually risk-free even without Echo/Lambda in the picture. Not throwaway
+work either — the same shared secret becomes the first real layer of
+proper auth later, since Lambda would need to know it to call in anyway.
+Pair with binding the server to `127.0.0.1` by default, not `0.0.0.0` —
+LAN-reachability becomes an explicit per-deployment opt-in, not an
+accidental default. Full auth (accounts, tokens, rotation) stays
+deliberately deferred until Echo/remote access is an actual plan, not
+built speculatively now.
 
 ### Evaluation framework (added 2026-04-16, shipped 2026-08-03)
 
@@ -929,7 +941,7 @@ Agents can now genuinely see images and PDFs, and tools can hand back freshly-ge
 
 **Token/context handling, two separate mechanisms:** mechanism B's extraction is synchronous at tool-call time, so raw base64 never enters `Message` history at all. Mechanism A's viewed image *does* need to exist as a real content block for the model to see it, so `attachments.py::prune_attachments` keeps only the most-recently-viewed attachment "live" in what's sent to the model (mirrors `loops/react.py::_with_budget_note`'s disposable-overlay pattern exactly — canonical persisted history keeps every attachment, only the API-bound copy is pruned). Wired into both `react.py` and `rewoo.py` — the latter has its own independent tool-execution path that doesn't delegate to `react_run`, found by the validation pass, would otherwise have silently skipped pruning.
 
-**Storage:** new `agent_dir/tmp/`, cleared once at the start of each run (mirrors `eval/runner.py::_clear_memory`'s existing "fresh state" pattern) — deliberately not session-persisted (`session.py` untouched: a base64 blob surviving into `session.json` would already point at a deleted file on resume, since `tmp/` clears every run).
+**Storage:** new `agent_dir/tmp/` (mirrors `eval/runner.py::_clear_memory`'s existing "fresh state" pattern) — deliberately not session-persisted (`session.py` untouched: a base64 blob surviving into `session.json` would already point at a deleted file on resume). **Updated 2026-08-19:** each run now gets its own `tmp/<run-id>/` subfolder instead of a shared, rmtree-cleared `tmp/` — see "Concurrency-safety for per-agent-dir state" below; the "resume points at a deleted file" reasoning still holds, just per-run-folder rather than per-clear now.
 
 Verified live, zero mocks, real files, real API calls throughout: a real striped PNG (stdlib-only PNG encoder, no new dependency) viewed via `view_image` against live Anthropic — the model's exact color-and-order description proves genuine visual perception, not a guess (an earlier attempt with a too-small 40×30px test image got the colors wrong even with correctly-attached real image data, confirmed via an isolated raw-API call — a test-image-sizing issue, not a harness bug, fixed by using a larger image); two-image pruning confirmed against a live run (canonical history keeps both, the pruned overlay keeps one); mechanism B confirmed end-to-end via `execute_code` generating real PNG bytes in-process, saved correctly, zero base64 in captured output; graceful degradation confirmed against a real local OpenAI-compatible LM Studio server — both the deterministic Chat-Completions-has-no-PDF-type note and a genuine live provider rejection (`RuntimeError`, not a crash) verified for real.
 
@@ -946,6 +958,18 @@ Verified live, zero mocks, real files, real API calls throughout: a real striped
 Verified: `pytest tests/unit -q` → 644 passed (up from 588); ruff clean; `mypy --strict` clean (91 files); `radon cc --min D` → none (no D-or-worse anywhere). Real, zero-mock integration test (`tests/integration/test_real_loops.py::TestCompletionCheck`) proves a genuine fail-then-retry-then-pass cycle against the live Anthropic API — a deterministic counter-based checker script fails its first invocation and passes every one after, independent of model behavior, confirming the retry mechanism works end-to-end rather than just in mocked unit tests.
 
 `docs/roadmap.md` Priority Order renumbered (Adaptive re-planning is now #1); `docs/features.md`/`README.md` updated.
+
+### Concurrency-safety for per-agent-dir state (added 2026-08-15, resolved 2026-08-19)
+
+Fixed three real races confirmed against actual code, all triggered by two concurrent runs of the *same* agent (e.g. two rooms asking the same home-assistant agent something at once): (1) `runtime.py::prepare_runtime` unconditionally `rmtree`d and recreated `agent_dir/tmp/` on every call — two concurrent runs could wipe each other's in-progress binary tool output; (2) `memory.py::save_memory`'s naive `write_text` could leave a garbled file on a concurrent write to the same key; (3) `session.py::save_session` had the same naive-write problem, only relevant when two concurrent runs share the same `--session` name.
+
+**tmp/ — isolated per-run, not locked.** `prepare_runtime` now generates a short id (`uuid.uuid4().hex[:8]`) and creates `agent_dir/tmp/<run-id>/` instead of clearing a shared `tmp/`. The `shutil.rmtree` call is gone entirely — nothing to clear that another run owns. `PreparedRuntime` gained a `tmp_dir: str` field so callers/tests learn the resolved per-run path (nothing downstream assumed a fixed `agent_dir/tmp` location — `execute_tool`/`extract_and_save_binary_output` already treated it as an opaque path, and the model always learns the real saved path from the tool's own returned text). **Accepted, documented tradeoff:** old run subfolders are never cleaned up — age-based cleanup would need a threshold that can't misfire against a genuinely slow still-running process, and there's no evidence unbounded `tmp/` growth is a real problem yet.
+
+**memory.py / session.py — atomic write via same-directory temp file + `os.replace`, not locking.** New leaf module `agent_harness/atomic_write.py` (stdlib only, zero internal imports): `atomic_write_text(path, content)` writes to a uniquely-named temp file in the same directory (same filesystem, so the rename is atomic) then `os.replace`s it into place — a reader always sees the complete old content or the complete new content, never a partial/interleaved write. Deliberately does **not** resolve which of two truly concurrent writes to the identical key wins — documented last-write-wins for that narrow case, not building merge semantics without evidence it's needed. Both `memory.py`/`session.py` got a one-line write-call swap each, no public signature changes.
+
+Verified: `pytest tests/unit -q` → 684 passed (up from 644); ruff clean; `mypy --strict` clean (95 files); `radon cc --min D` → none. Real, zero-mock concurrency stress tests in `tests/integration/test_concurrency_safety.py` (`threading.Thread` + `threading.Barrier` to force genuine overlap, not staggered starts; final-state-only assertions, not timing-dependent) prove 500 concurrent writes to the same memory key and 500 concurrent writes to the same session file never produce a garbled/corrupt result. A parallel unit test (`test_concurrent_prepare_runtime_calls_get_isolated_tmp_dirs`) confirms 10 concurrent `prepare_runtime` calls each get a distinct `tmp_dir` with nothing clobbered.
+
+`docs/roadmap.md` Priority Order renumbered (Permission/approval UX for no-terminal contexts is now #1, API/async boundary #2, parallel tool-call execution #3, parallel sub-agent fan-out #4).
 
 ### Step-level tool-call thrashing breaker (added 2026-08-15, resolved 2026-08-15)
 

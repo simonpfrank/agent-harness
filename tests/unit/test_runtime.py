@@ -1,5 +1,6 @@
 """Tests for agent_harness.runtime."""
 
+import threading
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -449,23 +450,25 @@ class TestTmpDirLifecycle:
             config, permission_prompt_fn=lambda _tc: PermissionDecision.deny(), show_output=False, trace_enabled=False,
         )
 
-        assert (agent_dir / "tmp").is_dir()
+        assert Path(runtime.tmp_dir).is_dir()
+        assert Path(runtime.tmp_dir).parent == agent_dir / "tmp"
         runtime.finalize()
 
-    def test_clears_pre_existing_tmp_dir_contents(self, tmp_path: Path) -> None:
+    def test_stale_content_in_other_run_dirs_is_left_alone(self, tmp_path: Path) -> None:
         agent_dir = tmp_path / "agent"
         agent_dir.mkdir()
-        stale_tmp = agent_dir / "tmp"
-        stale_tmp.mkdir()
-        (stale_tmp / "stale_file.png").write_bytes(b"old data")
+        stale_run_dir = agent_dir / "tmp" / "old-run-id"
+        stale_run_dir.mkdir(parents=True)
+        stale_file = stale_run_dir / "stale_file.png"
+        stale_file.write_bytes(b"old data")
         config = _tmp_agent_config(agent_dir)
 
         runtime = prepare_runtime(
             config, permission_prompt_fn=lambda _tc: PermissionDecision.deny(), show_output=False, trace_enabled=False,
         )
 
-        assert not (stale_tmp / "stale_file.png").exists()
-        assert stale_tmp.is_dir()
+        assert stale_file.exists()
+        assert Path(runtime.tmp_dir) != stale_run_dir
         runtime.finalize()
 
     def test_tmp_dir_threaded_into_execute_tool(self, tmp_path: Path) -> None:
@@ -486,5 +489,32 @@ class TestTmpDirLifecycle:
             runtime.callbacks.on_tool_call(tc)
 
         _, kwargs = mock_execute_tool.call_args
-        assert kwargs["tmp_dir"] == str(agent_dir / "tmp")
+        assert kwargs["tmp_dir"] == runtime.tmp_dir
         runtime.finalize()
+
+    def test_concurrent_prepare_runtime_calls_get_isolated_tmp_dirs(self, tmp_path: Path) -> None:
+        agent_dir = tmp_path / "agent"
+        agent_dir.mkdir()
+        config = _tmp_agent_config(agent_dir)
+        results: list[str] = []
+        lock = threading.Lock()
+
+        def run() -> None:
+            rt = prepare_runtime(
+                config, permission_prompt_fn=lambda _tc: PermissionDecision.deny(),
+                show_output=False, trace_enabled=False,
+            )
+            (Path(rt.tmp_dir) / "marker.txt").write_text(rt.tmp_dir)
+            with lock:
+                results.append(rt.tmp_dir)
+            rt.finalize()
+
+        threads = [threading.Thread(target=run) for _ in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(set(results)) == 10  # every run got its own dir
+        for tmp_dir in results:
+            assert (Path(tmp_dir) / "marker.txt").read_text() == tmp_dir  # nothing clobbered

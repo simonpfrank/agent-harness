@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from agent_harness.atomic_write import atomic_write_text
 from agent_harness.types import Message, ToolCall, ToolResult
 
 logger = logging.getLogger(__name__)
@@ -83,7 +84,7 @@ def save_session(messages: list[Message], path: str) -> None:
     try:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         data = [_message_to_dict(m) for m in messages]
-        Path(path).write_text(json.dumps(data, indent=2))
+        atomic_write_text(path, json.dumps(data, indent=2))
         logger.info("Session saved: %d messages to %s", len(messages), path)
     except OSError:
         logger.warning("Could not save session to %s", path)

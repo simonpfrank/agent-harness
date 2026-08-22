@@ -177,7 +177,7 @@ class TestMechanismBRealPipeline:
         runtime.run_messages(messages, prompt=prompt)
         runtime.finalize()
 
-        saved = Path(config.agent_dir) / "tmp" / "made.png"
+        saved = Path(runtime.tmp_dir) / "made.png"
         assert saved.exists()
         assert saved.read_bytes() == png_bytes
 

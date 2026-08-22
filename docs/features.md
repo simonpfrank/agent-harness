@@ -167,9 +167,9 @@ saw.
   same disposable-overlay pattern as the budget status note); canonical,
   session-persisted history keeps every attachment it saw, session
   round-tripping deliberately drops them (the file itself won't survive a
-  resume anyway, since `tmp/` clears every run). See "Multimodal / file
-  handling" below for the full picture, including agent-produced binary
-  output.
+  resume anyway, since each run gets its own `tmp/<run-id>/` subfolder —
+  see "Concurrency-safety" below). See "Multimodal / file handling" below
+  for the full picture, including agent-produced binary output.
 - `web_fetch(url)` — fetches a URL and extracts main readable content via
   `trafilatura` (discards nav/ads/boilerplate, not just raw HTML→text).
   Falls back to raw page text if extraction finds nothing substantial.
@@ -278,18 +278,25 @@ Full PRD + as-built spec in `docs/multimodal-plan.md`. Two capabilities:
   detector, which deliberately exempts absolute paths for a different,
   narrower purpose and would be unsafe reused here; size cap; decoded
   bytes' magic-byte signature must match the claimed media type), and
-  saves it to `{agent_dir}/tmp/`, replacing the envelope with a short text
-  reference (`"[saved: chart.png (image/png, 42KB) -> tmp/chart.png]"`)
+  saves it to `{agent_dir}/tmp/<run-id>/`, replacing the envelope with a
+  short text reference (`"[saved: chart.png (image/png, 42KB) -> tmp/a1b2c3d4/chart.png]"`)
   before it ever enters persisted history or the CLI display. Extraction
   runs strictly *before* `execute_tool`'s output truncation, so a large
   base64 payload can't get corrupted first.
-- **`{agent_dir}/tmp/`** — cleared once at the start of each run
-  (`runtime.py::prepare_runtime`, mirrors `eval/runner.py::_clear_memory`'s
-  "fresh state per run" precedent), gitignored (`**/tmp/`). Not session-
-  persisted (`session.py` deliberately unchanged) — a saved file wouldn't
-  survive a session resume in a new process anyway, since `tmp/` clears
-  every run; on resume, prior attachments round-trip as `None`, which is
-  correct, not a gap.
+- **`{agent_dir}/tmp/<run-id>/`** — each `prepare_runtime` call gets its
+  own subfolder (`uuid.uuid4().hex[:8]`, `PreparedRuntime.tmp_dir` exposes
+  the resolved path) instead of a single shared `tmp/` that used to be
+  `rmtree`d at the start of every run — the old shared-and-cleared design
+  let two concurrent runs of the same agent wipe each other's in-progress
+  output; see "Concurrency-safety for per-agent-dir state" below.
+  Gitignored (`**/tmp/`). Not session-persisted (`session.py` deliberately
+  unchanged) — a saved file wouldn't survive a session resume in a new
+  process anyway, since a resume gets a fresh run-id and thus a fresh
+  folder; on resume, prior attachments round-trip as `None`, which is
+  correct, not a gap. Old run subfolders are not cleaned up (accepted
+  tradeoff — no evidence unbounded growth is a real problem yet, and an
+  age-based cleanup threshold risks colliding with a genuinely slow
+  still-running process).
 - **Provider/model capability** — deliberately not pre-validated against a
   harness-maintained "which models support vision" table (same lesson as
   the `COST_TABLE`/o4-mini drift bug — a second stale table would be the
@@ -348,6 +355,16 @@ Full PRD + as-built spec in `docs/multimodal-plan.md`. Two capabilities:
   (including tool calls/results, thinking blocks) serialized to JSON via
   `--session <name>`, resumable across CLI invocations. Corrupted/malformed
   session files fail safe (start fresh, don't crash).
+- **Concurrency-safety for per-agent-dir state** — `save_memory`/
+  `save_session` write via `atomic_write.py::atomic_write_text` (temp file
+  in the same directory + `os.replace`), not a naive `write_text`. A
+  reader always sees the complete old content or the complete new content,
+  never a partial/interleaved write, under real concurrent writers. Two
+  truly concurrent writes to the identical memory key or session name
+  still resolve last-write-wins — deliberate, documented, not a merge/lock
+  mechanism, since there's no evidence that narrower case needs solving.
+  Proven with real `threading.Thread`/`threading.Barrier` stress tests
+  (`tests/integration/test_concurrency_safety.py`), not mocks.
 
 ## Observability
 

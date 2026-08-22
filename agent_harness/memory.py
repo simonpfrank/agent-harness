@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from agent_harness.atomic_write import atomic_write_text
 from agent_harness.hooks import INJECTION_PATTERNS
 
 DEFAULT_MEMORY_DIR = "memory"
@@ -29,7 +30,7 @@ def save_memory(key: str, content: str, memory_dir: str = DEFAULT_MEMORY_DIR) ->
             break
     mem_path = Path(memory_dir)
     mem_path.mkdir(parents=True, exist_ok=True)
-    (mem_path / f"{key}.md").write_text(content)
+    atomic_write_text(mem_path / f"{key}.md", content)
     return f"Saved memory: {key}"
 
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-import shutil
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -123,6 +123,8 @@ class PreparedRuntime:
         budget: Turn/cost tracker for this run.
         mcp_manager: Connections to this run's configured MCP servers, or
             None if the agent has none configured.
+        tmp_dir: This run's isolated scratch directory, unique per
+            `prepare_runtime` call so concurrent runs never collide.
     """
 
     config: AgentConfig
@@ -135,6 +137,7 @@ class PreparedRuntime:
     tracer: Tracer | _NullTracer
     budget: Budget
     mcp_manager: McpManager | None = None
+    tmp_dir: str = ""
 
     def init_messages(
         self,
@@ -401,10 +404,17 @@ def prepare_runtime(
     Returns:
         Prepared runtime object that can initialize messages, run the loop, and persist
         permission state at the end of the session.
+
+    Note:
+        Each call gets its own subfolder under `{agent_dir}/tmp/` so concurrent
+        runs of the same agent never clobber each other's scratch output.
+        Old run subfolders are not cleaned up — age-based cleanup would need a
+        threshold that can't misfire against a genuinely slow still-running
+        process, and there's no evidence yet that unbounded `tmp/` growth is
+        a real problem worth that risk.
     """
-    tmp_dir = Path(config.agent_dir) / "tmp"
-    if tmp_dir.exists():
-        shutil.rmtree(tmp_dir)
+    run_id = uuid.uuid4().hex[:8]
+    tmp_dir = Path(config.agent_dir) / "tmp" / run_id
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
     tool_context = ToolRuntimeContext(
@@ -464,4 +474,5 @@ def prepare_runtime(
         tracer=tracer,
         budget=budget,
         mcp_manager=mcp_manager,
+        tmp_dir=str(tmp_dir),
     )
