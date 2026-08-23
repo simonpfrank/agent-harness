@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -92,6 +93,8 @@ def make_network_blocker(
     Returns:
         A before-tool hook function.
     """
+    lock = threading.Lock()
+
     def blocker(tool_call: ToolCall) -> ToolCall | None:
         is_network, text = _has_network_intent(tool_call)
         if not is_network:
@@ -101,16 +104,25 @@ def make_network_blocker(
         if domain and domain in allowed_domains:
             return tool_call
 
-        if domain and prompt_fn and prompt_fn(domain):
-            allowed_domains.add(domain)
-            if persist_path:
-                try:
-                    Path(persist_path).parent.mkdir(parents=True, exist_ok=True)
-                    Path(persist_path).write_text(yaml.dump({"domains": sorted(allowed_domains)}))
-                except OSError:
-                    logger.warning("Could not save domain whitelist to %s", persist_path)
-            logger.info("Domain whitelisted: %s", domain)
-            return tool_call
+        # Parallel tool-call execution means this can now be entered from
+        # multiple threads within the same turn. Locking the whole
+        # check/prompt/record block (not just the prompt call) avoids both
+        # racing stdin/stdout on a blocking interactive prompt_fn and a
+        # check-then-record TOCTOU race that could double-prompt the same
+        # domain.
+        with lock:
+            if domain and domain in allowed_domains:
+                return tool_call
+            if domain and prompt_fn and prompt_fn(domain):
+                allowed_domains.add(domain)
+                if persist_path:
+                    try:
+                        Path(persist_path).parent.mkdir(parents=True, exist_ok=True)
+                        Path(persist_path).write_text(yaml.dump({"domains": sorted(allowed_domains)}))
+                    except OSError:
+                        logger.warning("Could not save domain whitelist to %s", persist_path)
+                logger.info("Domain whitelisted: %s", domain)
+                return tool_call
 
         logger.warning("Blocked network access: %s", text[:80])
         return None

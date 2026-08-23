@@ -90,10 +90,17 @@ Seven interchangeable loop patterns, selected via `config.yaml: loop:`.
   the model after the turn completes, and `LoopCallbacks.on_thrash_detected`
   fires (traced as `thrash_detected`). Detect-and-nudge only — no
   stop/escalate behavior; the loop continues exactly as before otherwise.
-  Because `reflection`/`eval_optimize`/`plan_execute`'s step execution and
-  `ralph`'s per-attempt execution all delegate to a react sub-loop, every
-  loop gets this for free; `rewoo` has its own independent tool-execution
-  path and doesn't (acknowledged gap, not yet built).
+  A turn's tool calls also run **in parallel** by default
+  (`config.yaml: parallel_tool_calls`, default `true`; set `false` to opt
+  out per-agent) via a capped `ThreadPoolExecutor` (max 8 workers) — a
+  single-call turn always takes the plain sequential path, no executor
+  overhead. Results land in the message history in original call order
+  regardless of completion order, so output stays deterministic even
+  though execution isn't. Because `reflection`/`eval_optimize`/`plan_execute`'s
+  step execution and `ralph`'s per-attempt execution all delegate to a
+  react sub-loop, every loop gets both of these for free; `rewoo` has its
+  own independent tool-execution path and doesn't (acknowledged gap, not
+  yet built).
 - **`plan_execute`** — plan once (numbered list, no tools), then a bounded
   (max 2 rounds) critique/refine round against the plan text itself (reuses
   `reflection`'s generate→critique→refine pattern; stops on a `DONE` marker
@@ -335,7 +342,12 @@ Full PRD + as-built spec in `docs/multimodal-plan.md`. Two capabilities:
   `always_ask`, and a prompt-and-remember tier (once / for the session /
   persistently, saved to `.permissions.yaml`). **Inert by default** — an
   agent with no `permissions:` config block allows every tool with no
-  prompting.
+  prompting. `Permissions.check()` holds a lock across its whole body (not
+  just the prompt call) — needed once parallel tool-call execution could
+  put two calls needing approval in the same turn: without it, two
+  interactive prompts (e.g. the CLI's `Console.input()`) would race on
+  stdin/stdout, and a check-then-record race could double-prompt for the
+  same tool.
 - **Default safety hooks** (`hooks.py`) — on regardless of permission
   config, unless an agent explicitly overrides `before_tool`/`after_tool`:
   - `dangerous_command_blocker` — blocks `rm -rf`, `sudo`, `mkfs`, `dd if=`,
@@ -345,7 +357,8 @@ Full PRD + as-built spec in `docs/multimodal-plan.md`. Two capabilities:
   - `network_exfiltration_blocker` (`network.py`) — domain-allowlist for
     network-capable commands/code (`curl`, `wget`, `requests`, `urllib`);
     interactive per-domain approval, persisted to
-    `{agent_dir}/.allowed_domains.yaml`.
+    `{agent_dir}/.allowed_domains.yaml`. Same lock-the-whole-check fix as
+    `Permissions.check()` above, same reason.
   - `injection_scanner` — scans tool *output* for prompt-injection patterns
     ("ignore previous", etc.), wraps matches in an `[EXTERNAL CONTENT
     WARNING]` marker. Flags, doesn't block. Three narrow regex patterns.
@@ -416,7 +429,8 @@ Full PRD + as-built spec in `docs/multimodal-plan.md`. Two capabilities:
   reasoning_effort), `permissions`, `hooks`, `stream`, `show_thinking`,
   `mcp_servers` (list of `{name, command, args, env}` — see "MCP client
   support" above), `completion_check` (see "Verified completion" above),
-  `thrash_threshold` (see "Agent loops" above — on by default, 3).
+  `thrash_threshold` (see "Agent loops" above — on by default, 3),
+  `parallel_tool_calls` (see "Agent loops" above — on by default, `false` opts out).
 - **CLI** (`cli.py`) — `agent-harness run <dir> [prompt]` (single-shot or
   REPL if no prompt), `agent-harness init <name>` (scaffold a new agent),
   `agent-harness serve` (HTTP API server — see below).

@@ -93,6 +93,7 @@ class AgentConfig:
     mcp_servers: list[dict[str, Any]] = field(default_factory=list)
     completion_check: str | None = None
     thrash_threshold: int = 3
+    parallel_tool_calls: bool = True
 
 
 # Callback type aliases

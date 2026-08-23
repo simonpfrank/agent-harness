@@ -4,15 +4,47 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from agent_harness.attachments import prune_attachments
 from agent_harness.context import get_context_limit, trim_messages
 from agent_harness.loops.common import check_tool_thrashing
 from agent_harness.tools import execute_tool
-from agent_harness.types import AgentConfig, LoopCallbacks, Message, Response
+from agent_harness.types import AgentConfig, LoopCallbacks, Message, Response, ToolCall, ToolResult
 
 logger = logging.getLogger(__name__)
+
+_MAX_PARALLEL_WORKERS = 8
+
+
+def _run_tool_calls(
+    tool_calls: list[ToolCall], cb: LoopCallbacks, parallel: bool,
+) -> list[tuple[ToolCall, ToolResult | None]]:
+    """Execute one turn's tool calls, sequentially or in parallel.
+
+    Args:
+        tool_calls: This turn's tool calls, in the order the model requested them.
+        cb: Loop callbacks; `on_tool_call` (or `execute_tool` if unset) does the work.
+        parallel: Whether to use a thread pool. Ignored for a single call —
+            there's nothing to parallelize and it would only add overhead.
+
+    Returns:
+        (tool_call, result) pairs in the same order as `tool_calls`, regardless
+        of which order they actually completed in — keeps the resulting
+        message history deterministic even though execution isn't. A real
+        exception from a call propagates from here (via `future.result()`),
+        same as it would from a plain sequential loop.
+    """
+    def call(tc: ToolCall) -> ToolResult | None:
+        return cb.on_tool_call(tc) if cb.on_tool_call else execute_tool(tc)
+
+    if not parallel or len(tool_calls) <= 1:
+        return [(tc, call(tc)) for tc in tool_calls]
+
+    with ThreadPoolExecutor(max_workers=min(len(tool_calls), _MAX_PARALLEL_WORKERS)) as executor:
+        futures = [executor.submit(call, tc) for tc in tool_calls]
+        return [(tc, future.result()) for tc, future in zip(tool_calls, futures, strict=True)]
 
 
 def _with_budget_note(messages: list[Message], cb: LoopCallbacks) -> list[Message]:
@@ -86,11 +118,14 @@ def run(
 
         thrash_detail: str | None = None
         thrash_tool = ""
-        for tc in response.message.tool_calls or []:
+        tool_calls = response.message.tool_calls or []
+        for tc in tool_calls:
             logger.debug("Executing tool: %s(%s)", tc.name, list(tc.arguments.keys()))
-            result = cb.on_tool_call(tc) if cb.on_tool_call else execute_tool(tc)
+        results = _run_tool_calls(tool_calls, cb, config.parallel_tool_calls)
+        for _tc, result in results:
             if result is not None:
                 messages.append(Message(role="tool", tool_result=result))
+        for tc, result in results:
             detail = check_tool_thrashing(tc, result, call_counts, error_streaks, config.thrash_threshold)
             if detail is not None:
                 thrash_detail = detail

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -100,9 +101,18 @@ class Permissions:
         self._persist_path = persist_path
         self._persistent_approved: set[str] = set()
         self._dirty = False
+        self._lock = threading.Lock()
 
     def check(self, tool_call: ToolCall) -> bool:
         """Check if a tool call is approved.
+
+        Parallel tool-call execution means this can now be called from
+        multiple threads within the same turn. The whole method (after the
+        immutable `_active` fast path) is serialized: `_prompt_fn` may be a
+        blocking, interactive call (e.g. the CLI's `Console.input()`), and
+        unserialized concurrent prompts would race on stdin/stdout as well
+        as double-prompt for the same tool via a check-then-record race on
+        the approved sets below.
 
         Args:
             tool_call: The tool call to check.
@@ -113,29 +123,30 @@ class Permissions:
         if not self._active:
             return True
 
-        name = tool_call.name
-        if name in self._always_allow:
-            return True
+        with self._lock:
+            name = tool_call.name
+            if name in self._always_allow:
+                return True
 
-        if name in self._always_ask:
+            if name in self._always_ask:
+                decision = _normalize_decision(self._prompt_fn(tool_call))
+                logger.info("Tool %s: user %s", name, "approved" if decision.approved else "denied")
+                return decision.approved
+
+            if name in self._persistent_approved or name in self._session_approved:
+                return True
+
             decision = _normalize_decision(self._prompt_fn(tool_call))
-            logger.info("Tool %s: user %s", name, "approved" if decision.approved else "denied")
-            return decision.approved
-
-        if name in self._persistent_approved or name in self._session_approved:
+            if not decision.approved:
+                logger.info("Tool %s: denied", name)
+                return False
+            if decision.mode is ApprovalMode.ALLOW_SESSION:
+                self._session_approved.add(name)
+            elif decision.mode is ApprovalMode.ALLOW_PERSISTENT:
+                self._persistent_approved.add(name)
+                self._dirty = True
+            logger.info("Tool %s: approved via %s", name, decision.mode.value)
             return True
-
-        decision = _normalize_decision(self._prompt_fn(tool_call))
-        if not decision.approved:
-            logger.info("Tool %s: denied", name)
-            return False
-        if decision.mode is ApprovalMode.ALLOW_SESSION:
-            self._session_approved.add(name)
-        elif decision.mode is ApprovalMode.ALLOW_PERSISTENT:
-            self._persistent_approved.add(name)
-            self._dirty = True
-        logger.info("Tool %s: approved via %s", name, decision.mode.value)
-        return True
 
     def save(self) -> None:
         """Save persistent permissions to disk.

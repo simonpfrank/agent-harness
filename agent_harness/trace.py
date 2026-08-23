@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,7 @@ class Tracer:
 
     def __init__(self, log_dir: str | None) -> None:
         self._file: Path | None = None
+        self._lock = threading.Lock()
         if log_dir:
             path = Path(log_dir)
             path.mkdir(parents=True, exist_ok=True)
@@ -41,8 +43,9 @@ class Tracer:
             **data,
         }
         try:
-            self._file.parent.mkdir(parents=True, exist_ok=True)
-            with open(self._file, "a") as f:
-                f.write(json.dumps(entry) + "\n")
+            with self._lock:
+                self._file.parent.mkdir(parents=True, exist_ok=True)
+                with open(self._file, "a") as f:
+                    f.write(json.dumps(entry) + "\n")
         except OSError as exc:
             logging.getLogger(__name__).warning("Trace write failed: %s", exc)

@@ -84,6 +84,18 @@ class TestLoadValid:
         cfg = load(VALID)
         assert cfg.thrash_threshold == 3
 
+    def test_parallel_tool_calls_defaults_to_true(self) -> None:
+        cfg = load(VALID)
+        assert cfg.parallel_tool_calls is True
+
+    def test_loads_parallel_tool_calls_disabled(self, tmp_path: Path) -> None:
+        agent_dir = tmp_path / "agent"
+        agent_dir.mkdir()
+        (agent_dir / "config.yaml").write_text("name: test\nparallel_tool_calls: false\n")
+        (agent_dir / "instructions.md").write_text("test agent")
+        cfg = load(str(agent_dir))
+        assert cfg.parallel_tool_calls is False
+
 
 class TestLoadInvalid:
     def test_missing_instructions(self) -> None:

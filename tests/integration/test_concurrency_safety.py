@@ -5,14 +5,16 @@ save_memory/save_session/prepare_runtime touch a provider.
 """
 
 import threading
+import time
 from pathlib import Path
 
 import yaml
 
+from agent_harness.loops.react import run as react_run
 from agent_harness.memory import recall_memory, save_memory
 from agent_harness.permissions import PermissionDecision, Permissions
 from agent_harness.session import Session, load_session, save_session
-from agent_harness.types import Message, ToolCall
+from agent_harness.types import AgentConfig, Message, Response, ToolCall, Usage
 
 _N_THREADS = 20
 _ITERATIONS = 25
@@ -110,3 +112,39 @@ class TestConcurrentPermissionsWrites:
         possible = {f"writer-{w}-iter-{i}" for w in range(_N_THREADS) for i in range(_ITERATIONS)}
         assert data["approved"] == sorted({name for name in data["approved"] if name in possible})
         assert len(data["approved"]) == 1
+
+
+def _config() -> AgentConfig:
+    return AgentConfig(
+        name="test", provider="anthropic", model="claude-haiku-4-5-20251001",
+        agent_dir="/tmp/test", instructions="test",
+    )
+
+
+class TestParallelToolCallWallClockSpeedup:
+    """Real, zero-mock proof that parallel tool-call execution actually
+    overlaps at the OS level, not just at the Python-thread level: two real
+    `run_command` calls (real subprocesses, each sleeping 1s) in one turn
+    complete in ~1s total, not ~2s. No API key needed — chat_fn is a plain
+    hand-written function, not a provider call."""
+
+    def test_two_one_second_sleeps_complete_in_about_one_second(self) -> None:
+        tc1 = ToolCall(id="tc_1", name="run_command", arguments={"command": "sleep 1"})
+        tc2 = ToolCall(id="tc_2", name="run_command", arguments={"command": "sleep 1"})
+        responses = iter([
+            Response(
+                message=Message(role="assistant", content="go", tool_calls=[tc1, tc2]),
+                usage=Usage(10, 5), stop_reason="tool_use",
+            ),
+            Response(message=Message(role="assistant", content="done"), usage=Usage(10, 5), stop_reason="end_turn"),
+        ])
+
+        def chat_fn(*_args: object, **_kwargs: object) -> Response:
+            return next(responses)
+
+        messages = [Message(role="user", content="run two sleeps")]
+        start = time.monotonic()
+        react_run(chat_fn, messages, [], _config())
+        elapsed = time.monotonic() - start
+
+        assert elapsed < 1.7  # sequential would take >= 2.0s; parallel should land near 1.0s

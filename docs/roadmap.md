@@ -12,8 +12,8 @@ Ranked list of everything currently committed to build (drawn from `Near-term Im
 
 **Track A — Interface/access expansion** (multi-device, multi-task future — Echo/phone/Reachy, not just CLI): shipped — see "HTTP API server" in Done below.
 
-**Track B — Single-task execution speed/quality** (soft-depends on the shipped API's approval mechanism only if approval-gated tools are involved):
-1. Parallel tool-call execution within a turn — has a concrete driving case (a research agent firing multiple fetches per turn)
+**Track B — Single-task execution speed/quality:**
+1. Parallel tool-call execution within a turn — shipped, see Done below.
 2. Parallel sub-agent fan-out — still no concrete driver, stays deferred
 
 **Shelved (2026-08-19), not in this ranking:** Adaptive re-planning — a full design exists (see Ideas below) but was pulled *during* plan mode when a direct check found zero example agents actually use `loop: plan_execute` yet. Investing in adaptation logic for an unused code path is exactly the "no code-level tweaks without hard evidence" mistake this project already corrected once (the prompt-override-file retraction). Next step before this returns to Priority Order: build and actually run a real `plan_execute`-based agent, see if the static-plan limitation genuinely bites.
@@ -316,19 +316,6 @@ MCP client support only implemented stdio (local subprocess) servers.
 (bearer token at minimum, OAuth 2.1 per spec for full compliance) can't be
 meaningfully built or tested speculatively — same discipline as delaying
 prompt caching/step-evidence until there's a real driving case.
-
-### Parallel tool-call execution within a turn
-
-Today (with or without MCP) a turn's tool calls execute one at a time,
-sequentially. **Cut from the MCP work specifically:** it's a loop-level
-change (`loops/react.py`/`loops/common.py`), not an MCP-client concern —
-built-in tools would benefit exactly as much as MCP ones, so it belongs in
-its own item, not bolted onto this one.
-
-**Note (2026-08-15):** Priority Order #4 — has a concrete driving case (a
-research agent firing multiple fetches per turn) and soft-depends on
-"Permission/approval UX for no-terminal contexts" (Plausible Future
-Capabilities) only if approval-gated tools are involved.
 
 ### Run-abort on unsurvivable tool failure
 
@@ -788,6 +775,68 @@ Not bad ideas — just resolved one way or another. Kept with reasons rather tha
 ---
 
 ## Done
+
+### Parallel tool-call execution within a turn (added 2026-04-16, resolved 2026-08-23)
+
+A turn's tool calls now run concurrently via a `ThreadPoolExecutor`
+(`loops/react.py::_run_tool_calls`, capped at 8 workers) instead of one at a
+time — driven by the concrete case already on record (a research agent
+firing multiple `web_fetch` calls per turn). Default **on**
+(`AgentConfig.parallel_tool_calls: bool = True`, per-agent opt-out via
+`config.yaml`), matching the existing `thrash_threshold`/`completion_check`
+pattern rather than an easily-forgotten opt-in flag. A single-call turn (the
+overwhelmingly common case) skips the executor entirely — no overhead for the
+normal path. Results are collected in original call order regardless of
+completion order, keeping the resulting message history deterministic even
+though execution isn't; thrash detection (`check_tool_thrashing`) moved to
+run sequentially over the finished batch rather than interleaved, since it
+mutates shared dicts and there's no reason to make cheap bookkeeping
+thread-safe when it can just run after. Propagates for free to
+`reflection`/`eval_optimize`/`plan_execute`/`ralph`, all of which delegate
+their step execution to a react sub-loop — same free propagation the thrash
+guard got. `rewoo.py` has its own independent tool-execution loop and does
+**not** get this, an acknowledged gap matching the one the thrash guard left.
+
+**Two real correctness gaps found while grounding this in the actual code,
+not speculative — both closed as part of this build, not left as documented
+footguns, since parallel execution is what makes them possible in the first
+place:** `Permissions.check()` and `network.py::make_network_blocker` both
+call a synchronous, blocking `prompt_fn` (the CLI's is a literal
+`Console.input()`) — safe only because tool calls previously never ran
+concurrently. Two calls in the same turn both needing approval would have
+raced on stdin/stdout, and the underlying "check membership, maybe prompt,
+then record" sequence in both was a TOCTOU race that could double-prompt for
+the same tool/domain. Both now hold a lock around the whole check (not just
+the prompt call), which closes the double-prompt race as a side effect, not
+just the interleaved-stdin one. Also found: `trace.py::Tracer.record` opens
+its file in append mode per call with no lock — genuinely safe before
+(never concurrent), not guaranteed safe after. Given a lock too.
+
+Real, zero-mock verification, not just unit tests: `tests/integration/test_concurrency_safety.py::TestParallelToolCallWallClockSpeedup`
+runs the real react loop with two real `run_command "sleep 1"` calls (real
+subprocesses, no mocked provider — a plain hand-written `chat_fn`) in one
+turn and confirms wall-clock time lands near 1s, not 2s (asserted `< 1.7s`;
+measured exactly ~1.0s parallel vs. ~2.0s with `parallel_tool_calls=False`,
+confirming the test is genuinely discriminating, not trivially passing).
+Real-thread proofs (not just correctness assertions) for both lock fixes:
+`test_permissions.py::TestConcurrentPrompting` and
+`test_network.py::TestConcurrentDomainPrompting` each drive 10 real threads
+through a slow fake prompt and assert max concurrent entries is exactly 1 —
+confirmed genuinely red before the fix (10, not 1) and green after.
+`test_trace.py::TestConcurrentRecording` drives 500 concurrent real writes
+and confirms none are lost or corrupted — notably, this one did **not**
+reproduce red pre-fix (small appends are apparently already atomic at the
+OS level here), reported honestly rather than claimed as a red-first proof
+that didn't actually happen; the lock was added anyway as correct defensive
+engineering, not dependent on that OS behavior holding.
+
+`pytest tests/unit -q` → 791 passed (up from 780); `pytest tests/integration/test_concurrency_safety.py` → 4 passed; ruff clean; `mypy --strict` clean (108 files); `radon cc --min D` → none. One existing test
+(`test_react_loop.py::test_multi_tool_call_turn_nudge_positioned_after_both_results`)
+needed fixing, not just passing unchanged: its two-tool-call turn now
+executes in parallel by default, so its `MagicMock(side_effect=[...])` list
+assumed a call order the executor no longer guarantees — switched to a
+dict-keyed-by-`tool_call.id` side effect function, correct regardless of
+which thread reaches the mock first.
 
 ### Harness: path-traversal hook false-positive (resolved 2026-04-16)
 

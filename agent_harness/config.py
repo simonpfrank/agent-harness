@@ -80,6 +80,7 @@ def load(agent_dir: str) -> AgentConfig:
         mcp_servers=raw.get("mcp_servers", []),
         completion_check=raw.get("completion_check"),
         thrash_threshold=raw.get("thrash_threshold", 3),
+        parallel_tool_calls=raw.get("parallel_tool_calls", True),
     )
 
 

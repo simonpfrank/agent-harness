@@ -2,9 +2,13 @@
 
 import json
 import tempfile
+import threading
 from pathlib import Path
 
 from agent_harness.trace import Tracer
+
+_N_THREADS = 20
+_ITERATIONS = 25
 
 
 class TestTracer:
@@ -45,3 +49,38 @@ class TestTracer:
         tracer = Tracer(None)
         tracer.record("should_not_crash", key="value")
         # No exception, no file created
+
+
+class TestConcurrentRecording:
+    """Parallel tool-call execution means genuinely concurrent record() calls
+    from different threads within one run — previously impossible, since
+    tool calls always ran one at a time."""
+
+    def test_concurrent_records_never_corrupt_or_lose_a_line(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tracer = Tracer(tmpdir)
+            barrier = threading.Barrier(_N_THREADS)
+            errors: list[BaseException] = []
+
+            def writer(idx: int) -> None:
+                barrier.wait()  # maximize actual overlap, not staggered starts
+                for i in range(_ITERATIONS):
+                    try:
+                        tracer.record("tool_call", writer=idx, iteration=i)
+                    except BaseException as exc:  # noqa: BLE001
+                        errors.append(exc)
+
+            threads = [threading.Thread(target=writer, args=(i,)) for i in range(_N_THREADS)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+            assert errors == []
+            files = list(Path(tmpdir).glob("*.trace.jsonl"))
+            lines = files[0].read_text().strip().splitlines()
+            # Every line parses (no torn/interleaved write) and none were lost.
+            parsed = [json.loads(line) for line in lines]
+            assert len(parsed) == _N_THREADS * _ITERATIONS
+            seen = {(entry["writer"], entry["iteration"]) for entry in parsed}
+            assert seen == {(w, i) for w in range(_N_THREADS) for i in range(_ITERATIONS)}

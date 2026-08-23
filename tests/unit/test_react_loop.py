@@ -1,6 +1,8 @@
 """Tests for agent_harness.loops.react."""
 
-from unittest.mock import MagicMock
+import threading
+import time
+from unittest.mock import MagicMock, patch
 
 from agent_harness.loops.react import run
 from agent_harness.types import (
@@ -15,7 +17,9 @@ from agent_harness.types import (
 )
 
 
-def _config(max_turns: int = 10, stream: bool = False, thrash_threshold: int = 3) -> AgentConfig:
+def _config(
+    max_turns: int = 10, stream: bool = False, thrash_threshold: int = 3, parallel_tool_calls: bool = True,
+) -> AgentConfig:
     return AgentConfig(
         name="test",
         provider="anthropic",
@@ -25,6 +29,7 @@ def _config(max_turns: int = 10, stream: bool = False, thrash_threshold: int = 3
         max_turns=max_turns,
         stream=stream,
         thrash_threshold=thrash_threshold,
+        parallel_tool_calls=parallel_tool_calls,
     )
 
 
@@ -374,13 +379,16 @@ class TestThrashDetection:
             _response("done"),
         ]
         chat_fn = MagicMock(side_effect=responses)
-        on_tool_call = MagicMock(
-            side_effect=[
-                ToolResult(tool_call_id="tc_1", output="no results"),
-                ToolResult(tool_call_id="tc_2", output="file contents"),
-                ToolResult(tool_call_id="tc_3", output="no results"),
-            ],
-        )
+        # The second turn's two calls (tc_2, tc_3) now execute in parallel by
+        # default — a plain side_effect list assumes call order, which the
+        # executor no longer guarantees. Keyed by id instead, so it's correct
+        # regardless of which thread's call reaches the mock first.
+        results_by_id = {
+            "tc_1": ToolResult(tool_call_id="tc_1", output="no results"),
+            "tc_2": ToolResult(tool_call_id="tc_2", output="file contents"),
+            "tc_3": ToolResult(tool_call_id="tc_3", output="no results"),
+        }
+        on_tool_call = MagicMock(side_effect=lambda tc: results_by_id[tc.id])
         messages = [Message(role="user", content="go")]
         cb = LoopCallbacks(on_tool_call=on_tool_call)
         run(chat_fn, messages, [], _config(thrash_threshold=2), callbacks=cb)
@@ -397,3 +405,123 @@ class TestThrashDetection:
         assert messages[idx - 2].role == "tool"
         assert prev_result is not None
         assert prev_result.tool_call_id == "tc_2"
+
+
+class TestParallelToolCalls:
+    def test_results_land_in_original_order_regardless_of_completion_order(self) -> None:
+        tc1 = ToolCall(id="tc_1", name="fetch", arguments={"n": 1})
+        tc2 = ToolCall(id="tc_2", name="fetch", arguments={"n": 2})
+        tc3 = ToolCall(id="tc_3", name="fetch", arguments={"n": 3})
+        responses = [
+            _response("go", stop_reason="tool_use", tool_calls=[tc1, tc2, tc3]),
+            _response("done"),
+        ]
+        chat_fn = MagicMock(side_effect=responses)
+
+        # Deliberately reverse completion order: tc_1 sleeps longest, tc_3 shortest.
+        delays = {"tc_1": 0.06, "tc_2": 0.03, "tc_3": 0.0}
+
+        def on_tool_call(tc: ToolCall) -> ToolResult:
+            time.sleep(delays[tc.id])
+            return ToolResult(tool_call_id=tc.id, output=f"result-{tc.id}")
+
+        messages = [Message(role="user", content="go")]
+        cb = LoopCallbacks(on_tool_call=on_tool_call)
+        run(chat_fn, messages, [], _config(), callbacks=cb)
+
+        tool_msgs = [m for m in messages if m.role == "tool"]
+        assert [m.tool_result.tool_call_id for m in tool_msgs if m.tool_result] == ["tc_1", "tc_2", "tc_3"]
+
+    def test_calls_genuinely_overlap_in_separate_threads(self) -> None:
+        tc1 = ToolCall(id="tc_1", name="fetch", arguments={"n": 1})
+        tc2 = ToolCall(id="tc_2", name="fetch", arguments={"n": 2})
+        responses = [
+            _response("go", stop_reason="tool_use", tool_calls=[tc1, tc2]),
+            _response("done"),
+        ]
+        chat_fn = MagicMock(side_effect=responses)
+        thread_ids: list[int] = []
+        lock = threading.Lock()
+
+        def on_tool_call(tc: ToolCall) -> ToolResult:
+            with lock:
+                thread_ids.append(threading.get_ident())
+            time.sleep(0.02)
+            return ToolResult(tool_call_id=tc.id, output="ok")
+
+        messages = [Message(role="user", content="go")]
+        cb = LoopCallbacks(on_tool_call=on_tool_call)
+        run(chat_fn, messages, [], _config(), callbacks=cb)
+
+        assert len(set(thread_ids)) == 2  # two distinct worker threads, not the main thread serially
+
+    def test_parallel_tool_calls_false_falls_back_to_sequential(self) -> None:
+        tc1 = ToolCall(id="tc_1", name="fetch", arguments={"n": 1})
+        tc2 = ToolCall(id="tc_2", name="fetch", arguments={"n": 2})
+        responses = [
+            _response("go", stop_reason="tool_use", tool_calls=[tc1, tc2]),
+            _response("done"),
+        ]
+        chat_fn = MagicMock(side_effect=responses)
+        call_order: list[str] = []
+
+        def on_tool_call(tc: ToolCall) -> ToolResult:
+            call_order.append(tc.id)
+            return ToolResult(tool_call_id=tc.id, output="ok")
+
+        messages = [Message(role="user", content="go")]
+        cb = LoopCallbacks(on_tool_call=on_tool_call)
+        with patch("agent_harness.loops.react.ThreadPoolExecutor") as mock_executor:
+            run(chat_fn, messages, [], _config(parallel_tool_calls=False), callbacks=cb)
+        mock_executor.assert_not_called()
+        assert call_order == ["tc_1", "tc_2"]
+
+    def test_single_tool_call_turn_skips_the_executor(self) -> None:
+        tc1 = ToolCall(id="tc_1", name="fetch", arguments={"n": 1})
+        responses = [
+            _response("go", stop_reason="tool_use", tool_calls=[tc1]),
+            _response("done"),
+        ]
+        chat_fn = MagicMock(side_effect=responses)
+        on_tool_call = MagicMock(return_value=ToolResult(tool_call_id="tc_1", output="ok"))
+        messages = [Message(role="user", content="go")]
+        cb = LoopCallbacks(on_tool_call=on_tool_call)
+        with patch("agent_harness.loops.react.ThreadPoolExecutor") as mock_executor:
+            run(chat_fn, messages, [], _config(), callbacks=cb)
+        mock_executor.assert_not_called()
+
+    def test_thrash_detection_fires_for_a_parallel_batch(self) -> None:
+        tc1 = ToolCall(id="tc_1", name="search", arguments={"q": "x"})
+        tc2 = ToolCall(id="tc_2", name="search", arguments={"q": "x"})
+        tc3 = ToolCall(id="tc_3", name="search", arguments={"q": "x"})
+        responses = [
+            _response("go", stop_reason="tool_use", tool_calls=[tc1, tc2, tc3]),
+            _response("done"),
+        ]
+        chat_fn = MagicMock(side_effect=responses)
+        on_tool_call = MagicMock(side_effect=lambda tc: ToolResult(tool_call_id=tc.id, error="boom"))
+        messages = [Message(role="user", content="go")]
+        cb = LoopCallbacks(on_tool_call=on_tool_call)
+        run(chat_fn, messages, [], _config(thrash_threshold=3), callbacks=cb)
+        assert len(_nudges(messages)) == 1
+
+    def test_exception_in_one_parallel_call_propagates(self) -> None:
+        tc1 = ToolCall(id="tc_1", name="fetch", arguments={"n": 1})
+        tc2 = ToolCall(id="tc_2", name="fetch", arguments={"n": 2})
+        responses = [_response("go", stop_reason="tool_use", tool_calls=[tc1, tc2])]
+        chat_fn = MagicMock(side_effect=responses)
+
+        def on_tool_call(tc: ToolCall) -> ToolResult:
+            if tc.id == "tc_2":
+                raise RuntimeError("boom")
+            time.sleep(0.02)
+            return ToolResult(tool_call_id=tc.id, output="ok")
+
+        messages = [Message(role="user", content="go")]
+        cb = LoopCallbacks(on_tool_call=on_tool_call)
+        try:
+            run(chat_fn, messages, [], _config(), callbacks=cb)
+            raised = False
+        except RuntimeError:
+            raised = True
+        assert raised

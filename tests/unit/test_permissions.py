@@ -2,6 +2,8 @@
 
 import os
 import tempfile
+import threading
+import time
 
 from agent_harness.permissions import PermissionDecision, Permissions
 from agent_harness.types import ToolCall
@@ -64,6 +66,39 @@ class TestAlwaysAsk:
         perms.check(_tool_call("run_command"))
         perms.check(_tool_call("run_command"))
         assert call_count == 2
+
+
+class TestConcurrentPrompting:
+    """Parallel tool-call execution means two calls needing approval can now
+    fire from different threads in the same turn — previously impossible.
+    An unserialized prompt_fn (e.g. the CLI's Console.input()) would have
+    two prompts racing on stdin/stdout at once."""
+
+    def test_prompts_never_overlap(self) -> None:
+        in_flight = 0
+        max_concurrent = 0
+        lock = threading.Lock()
+
+        def slow_prompt(tc: ToolCall) -> bool:
+            nonlocal in_flight, max_concurrent
+            with lock:
+                in_flight += 1
+                max_concurrent = max(max_concurrent, in_flight)
+            time.sleep(0.05)  # widen the race window
+            with lock:
+                in_flight -= 1
+            return True
+
+        perms = Permissions({"always_ask": ["run_command"]}, prompt_fn=slow_prompt)
+        threads = [
+            threading.Thread(target=perms.check, args=(_tool_call("run_command"),)) for _ in range(10)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert max_concurrent == 1
 
 
 class TestSessionMemory:
