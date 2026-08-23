@@ -30,13 +30,28 @@ def _handle_event(
     if event_type == "thinking_delta" and show_thinking:
         # Each event is one small fragment (a word or two) — accumulate
         # them, don't just display the latest one, or it looks like the
-        # thinking text is replacing itself instead of growing.
+        # thinking text is replacing itself instead of growing. Show the
+        # whole thing rather than a fixed-length tail: a sliding window
+        # made old text vanish off the top on every new fragment, which
+        # read as the box randomly rewriting itself rather than growing.
         result["thinking_text"] = result.get("thinking_text", "") + data["text"]
-        status.caption(f"🤔 {result['thinking_text'][-300:]}")
+        status.caption(f"🤔 {result['thinking_text']}")
     elif event_type == "tool_call":
-        status.caption(f"🔧 calling `{data['name']}`…")
+        result.setdefault("tool_calls", {})[data["id"]] = {
+            "name": data["name"], "arguments": data["arguments"], "output": None, "error": None,
+        }
+        args_preview = ", ".join(f"{k}={v!r}" for k, v in data["arguments"].items())
+        status.caption(f"🔧 `{data['name']}({args_preview})`…")
     elif event_type == "tool_result":
-        status.caption(f"❌ {data['error']}" if data.get("error") else f"✅ `{data['tool_call_id']}` done")
+        record = result["tool_calls"][data["tool_call_id"]]
+        record["output"] = data.get("output")
+        record["error"] = data.get("error")
+        if record["error"]:
+            status.caption(f"❌ {record['error']}")
+        else:
+            output = (record["output"] or "").strip()
+            preview = output[:500] + ("…" if len(output) > 500 else "")
+            status.caption(f"✅ {preview}" if preview else "✅ done")
     elif event_type == "budget":
         status.caption(data["summary"])
     elif event_type == "thrash_warning":
@@ -51,6 +66,23 @@ def _handle_event(
         result["final_text"] = data.get("final_text") or ""
         return "stop"
     return None
+
+
+def _render_details(container: Any, msg: dict[str, Any]) -> None:
+    """Render an assistant turn's thinking/tool-call detail as collapsed
+    expanders — kept around after the turn finishes so they can be
+    studied later, rather than vanishing once the answer arrives."""
+    if msg.get("thinking"):
+        with container.expander("🤔 Thinking"):
+            st.markdown(msg["thinking"])
+    for tc in msg.get("tool_calls", []):
+        label = f"❌ {tc['name']}" if tc.get("error") else f"🔧 {tc['name']}"
+        with container.expander(label):
+            st.code(json.dumps(tc["arguments"], indent=2), language="json")
+            if tc.get("error"):
+                st.error(tc["error"])
+            elif tc.get("output"):
+                st.text(tc["output"])
 
 
 st.set_page_config(page_title="Agent Harness Chat", page_icon="💬")
@@ -92,6 +124,8 @@ if "messages" not in st.session_state:
 
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
+        if msg["role"] == "assistant":
+            _render_details(st.container(), msg)
         st.markdown(msg["content"])
 
 prompt = st.chat_input("Message the agent...", disabled=agent_name is None)
@@ -102,6 +136,7 @@ if prompt and agent_name:
         st.markdown(prompt)
 
     with st.chat_message("assistant"):
+        detail_area = st.container()  # reserved slot for thinking/tool-call expanders, filled in once the run ends
         status = st.empty()
         result: dict[str, Any] = {"final_text": None, "approval": None, "error": None}
 
@@ -150,4 +185,11 @@ if prompt and agent_name:
             )
         else:
             text = result["final_text"] if result["final_text"] is not None else final_text
-            st.session_state.messages.append({"role": "assistant", "content": text or ""})
+            msg = {
+                "role": "assistant",
+                "content": text or "",
+                "thinking": result.get("thinking_text", ""),
+                "tool_calls": list(result.get("tool_calls", {}).values()),
+            }
+            st.session_state.messages.append(msg)
+            _render_details(detail_area, msg)
