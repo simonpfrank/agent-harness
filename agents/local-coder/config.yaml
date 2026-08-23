@@ -5,5 +5,7 @@ loop: react
 tools: [run_command, read_file, execute_code]
 max_turns: 15
 max_cost: 1.00
+stream: true
+show_thinking: true
 provider_kwargs:
   base_url: "http://localhost:1234/v1"

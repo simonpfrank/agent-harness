@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 from agent_harness.config import load
 from agent_harness.permissions import PermissionDecision
 from agent_harness.runtime import prepare_runtime
-from agent_harness.session import load_session, save_session
+from agent_harness.session import Session, load_session, save_session
 
 load_dotenv()
 
@@ -139,12 +139,13 @@ class TestRealVisionPerception:
         runtime.run_messages(messages, prompt=f"Now call view_image on {path_b}. Reply with just 'ok'.")
         runtime.finalize()
 
-        session_path = str(tmp_path / "session.json")
-        save_session(messages, session_path)
-        reloaded = load_session(session_path)
+        session_file = str(tmp_path / "session.json")
+        save_session(Session(id="test-session", name=None, messages=messages), session_file)
+        reloaded = load_session(session_file)
 
+        assert reloaded is not None
         attachment_bearing = [
-            m for m in reloaded if m.tool_result is not None and m.tool_result.attachment is not None
+            m for m in reloaded.messages if m.tool_result is not None and m.tool_result.attachment is not None
         ]
         # Session persistence deliberately drops attachments (tmp/ is cleared
         # per-run) — this proves that design decision holds under a real run.

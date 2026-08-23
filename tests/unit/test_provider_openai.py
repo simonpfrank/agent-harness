@@ -221,6 +221,27 @@ class TestToResponse:
         assert response.message.tool_calls[0].arguments == {"path": "x"}
         assert response.stop_reason == "tool_use"
 
+    def test_reasoning_content_populates_thinking(self) -> None:
+        """Non-streaming LM Studio/vLLM-style responses put reasoning-model
+        thinking on message.reasoning_content — confirmed directly against
+        a real LM Studio response, including the observed case where the
+        model exhausts max_tokens entirely on thinking (content == '')."""
+        choice = MagicMock()
+        choice.message.role = "assistant"
+        choice.message.content = ""
+        choice.message.reasoning_content = "still thinking..."
+        choice.message.tool_calls = None
+        choice.finish_reason = "length"
+
+        mock_resp = MagicMock()
+        mock_resp.choices = [choice]
+        mock_resp.usage.prompt_tokens = 10
+        mock_resp.usage.completion_tokens = 20
+
+        response = _to_response(mock_resp)
+        assert response.message.content is None
+        assert response.message.thinking == "still thinking..."
+
     def test_tool_calls_with_stop_finish_reason(self) -> None:
         """OpenAI sometimes returns finish_reason=stop with tool_calls present."""
         tool_call = MagicMock()
@@ -584,8 +605,10 @@ class TestChatStreaming:
         assert result.message.content == "hi"
 
 
-def _cc_chunk(content: str | None = None, tool_calls: list[Any] | None = None) -> MagicMock:
-    delta = MagicMock(content=content, tool_calls=tool_calls)
+def _cc_chunk(
+    content: str | None = None, tool_calls: list[Any] | None = None, reasoning_content: str | None = None,
+) -> MagicMock:
+    delta = MagicMock(content=content, tool_calls=tool_calls, reasoning_content=reasoning_content)
     choice = MagicMock(delta=delta)
     return MagicMock(choices=[choice], usage=None)
 
@@ -625,6 +648,75 @@ class TestChatCompletionsStreaming:
         call_kwargs = mock_client.chat.completions.create.call_args.kwargs
         assert call_kwargs["stream"] is True
         assert call_kwargs["stream_options"] == {"include_usage": True}
+
+    @patch("agent_harness.providers.openai_provider._get_client")
+    def test_reasoning_content_deltas_fire_on_thinking_delta_not_on_delta(self, mock_get_client: MagicMock) -> None:
+        """LM Studio/vLLM-style backends stream thinking-model reasoning as
+        `delta.reasoning_content`, a separate field from `delta.content` —
+        confirmed directly against a real LM Studio response, not assumed."""
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        mock_client.chat.completions.create.return_value = iter([
+            _cc_chunk(reasoning_content="Let"),
+            _cc_chunk(reasoning_content=" me think"),
+            _cc_chunk(content="The"),
+            _cc_chunk(content=" answer"),
+        ])
+
+        thinking_received: list[tuple[str, str]] = []
+        answer_received: list[tuple[str, str]] = []
+        result = chat(
+            [Message(role="user", content="hi")],
+            tools=[],
+            model="qwen3-4b-thinking-2507",
+            base_url="http://localhost:1234/v1",
+            stream=True,
+            on_delta=lambda agent_id, chunk: answer_received.append((agent_id, chunk)),
+            on_thinking_delta=lambda agent_id, chunk: thinking_received.append((agent_id, chunk)),
+        )
+
+        assert thinking_received == [("default", "Let"), ("default", " me think")]
+        assert answer_received == [("default", "The"), ("default", " answer")]
+        assert result.message.thinking == "Let me think"
+        assert result.message.content == "The answer"
+
+    @patch("agent_harness.providers.openai_provider._get_client")
+    def test_reasoning_only_response_leaves_content_none_not_empty_string(self, mock_get_client: MagicMock) -> None:
+        """Real observed case: the model exhausts max_tokens entirely on
+        thinking (finish_reason='length') before emitting any real content —
+        content must be None, not '', so callers can tell nothing was said."""
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        mock_client.chat.completions.create.return_value = iter([_cc_chunk(reasoning_content="still thinking...")])
+
+        result = chat(
+            [Message(role="user", content="hi")],
+            tools=[],
+            model="qwen3-4b-thinking-2507",
+            base_url="http://localhost:1234/v1",
+            stream=True,
+        )
+
+        assert result.message.content is None
+        assert result.message.thinking == "still thinking..."
+
+    @patch("agent_harness.providers.openai_provider._get_client")
+    def test_no_thinking_delta_callback_does_not_raise(self, mock_get_client: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        mock_client.chat.completions.create.return_value = iter([
+            _cc_chunk(reasoning_content="thinking"), _cc_chunk(content="hi"),
+        ])
+
+        result = chat(
+            [Message(role="user", content="hi")],
+            tools=[],
+            model="qwen3-4b-thinking-2507",
+            base_url="http://localhost:1234/v1",
+            stream=True,
+        )
+        assert result.message.content == "hi"
+        assert result.message.thinking == "thinking"
 
     @patch("agent_harness.providers.openai_provider._get_client")
     def test_tool_call_arguments_concatenated_across_chunks(self, mock_get_client: MagicMock) -> None:

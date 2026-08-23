@@ -356,10 +356,15 @@ def _chat_completions_to_response(api_response: Any) -> Response:
             ),
         )
 
+    # LM Studio/vLLM-style backends return reasoning-model thinking on this
+    # non-standard field — real hosted OpenAI responses simply don't have
+    # it, so getattr(..., None) is the safe way to read it either way.
+    reasoning = getattr(choice.message, "reasoning_content", None)
     message = Message(
         role="assistant",
-        content=choice.message.content,
+        content=choice.message.content or None,
         tool_calls=tool_calls or None,
+        thinking=reasoning or None,
     )
     stop_reason = "tool_use" if tool_calls else "end_turn"
     return Response(
@@ -495,7 +500,7 @@ def _merge_tool_call_delta(fragments: dict[int, dict[str, Any]], tc_delta: Any) 
             fragment["arguments"] += tc_delta.function.arguments
 
 
-def _stream_chat_completions_deltas(stream: Any, on_delta: Any) -> Response:
+def _stream_chat_completions_deltas(stream: Any, on_delta: Any, on_thinking_delta: Any = None) -> Response:
     """Consume a Chat Completions chunk stream, dispatching text deltas.
 
     Unlike `client.responses.stream()`, `client.chat.completions.create(
@@ -505,11 +510,18 @@ def _stream_chat_completions_deltas(stream: Any, on_delta: Any) -> Response:
     Args:
         stream: Iterable of Chat Completions chunks.
         on_delta: Optional callback for text deltas, `(agent_id, chunk)`.
+        on_thinking_delta: Optional callback for thinking deltas,
+            `(agent_id, chunk)` — LM Studio/vLLM-style reasoning-model
+            backends stream thinking as `delta.reasoning_content`, a
+            separate field from `delta.content` (confirmed directly
+            against a real LM Studio response, not assumed). Real hosted
+            OpenAI Chat Completions responses simply never set this field.
 
     Returns:
         Parsed Response accumulated from the stream's chunks.
     """
     content_parts: list[str] = []
+    reasoning_parts: list[str] = []
     tool_call_fragments: dict[int, dict[str, Any]] = {}
     final_chunk: Any = None
 
@@ -519,6 +531,11 @@ def _stream_chat_completions_deltas(stream: Any, on_delta: Any) -> Response:
         if not chunk.choices:
             continue
         delta = chunk.choices[0].delta
+        reasoning = getattr(delta, "reasoning_content", None)
+        if reasoning:
+            reasoning_parts.append(reasoning)
+            if on_thinking_delta is not None:
+                on_thinking_delta("default", reasoning)
         if delta.content:
             content_parts.append(delta.content)
             if on_delta is not None:
@@ -538,6 +555,7 @@ def _stream_chat_completions_deltas(stream: Any, on_delta: Any) -> Response:
         role="assistant",
         content="".join(content_parts) or None,
         tool_calls=tool_calls or None,
+        thinking="".join(reasoning_parts) or None,
     )
     stop_reason = "tool_use" if tool_calls else "end_turn"
     return Response(message=message, usage=_usage_to_internal(final_chunk), stop_reason=stop_reason)
@@ -557,8 +575,11 @@ def chat(
         model: Model identifier.
         **kwargs: Provider overrides such as `temperature`, `top_p`,
             `max_tokens`, `base_url`, `api_key`, `stream` (bool), or
-            `on_delta` (`(agent_id, chunk) -> None`, only used when
-            `stream=True`).
+            `on_delta`/`on_thinking_delta` (`(agent_id, chunk) -> None`,
+            only used when `stream=True`). `on_thinking_delta` only fires
+            for the Chat Completions path against a reasoning-model backend
+            that streams `reasoning_content` (e.g. LM Studio) — the hosted
+            Responses API path doesn't surface reasoning deltas yet.
 
     Returns:
         Parsed Response with message, usage, and stop reason.
@@ -585,12 +606,13 @@ def chat(
     endpoint = _response_endpoint_for_model(model, base_url=base_url)
     client = _get_client(base_url=base_url, api_key=kwargs.get("api_key"))
     on_delta = kwargs.get("on_delta")
+    on_thinking_delta = kwargs.get("on_thinking_delta")
 
     def _call() -> Response:
         if endpoint == "chat_completions":
             if stream:
                 return _stream_chat_completions_deltas(
-                    client.chat.completions.create(**create_kwargs), on_delta
+                    client.chat.completions.create(**create_kwargs), on_delta, on_thinking_delta,
                 )
             return _to_response(client.chat.completions.create(**create_kwargs))
         if stream:

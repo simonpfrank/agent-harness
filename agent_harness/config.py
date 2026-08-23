@@ -81,3 +81,16 @@ def load(agent_dir: str) -> AgentConfig:
         completion_check=raw.get("completion_check"),
         thrash_threshold=raw.get("thrash_threshold", 3),
     )
+
+
+def list_agent_names(agents_dir: str = "agents") -> list[str]:
+    """List available agent directory names.
+
+    Args:
+        agents_dir: Directory containing one subfolder per agent.
+
+    Returns:
+        Sorted names of subfolders that contain a `config.yaml`. Empty if
+        `agents_dir` doesn't exist.
+    """
+    return sorted(p.parent.name for p in Path(agents_dir).glob("*/config.yaml"))

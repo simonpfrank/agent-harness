@@ -121,3 +121,22 @@ class LoopCallbacks:
     on_completion_status: OnCompletionStatus | None = None
     is_budget_exceeded: OnIsBudgetExceeded | None = None
     on_thrash_detected: OnThrashDetected | None = None
+
+
+@dataclass
+class OutputSink:
+    """Optional hooks for a driver to receive run events without a console.
+
+    `prepare_runtime` wires each field alongside (not instead of) the
+    existing `show_output`-gated console display — a CLI passes `None` and
+    is unaffected; a non-terminal driver (e.g. an API server) passes an
+    instance whose fields push events to wherever it needs them to go.
+    """
+
+    on_delta: OnDelta | None = None
+    on_thinking_delta: OnDelta | None = None
+    on_tool_call: Callable[[ToolCall], None] | None = None
+    on_tool_result: Callable[[ToolResult], None] | None = None
+    on_budget: Callable[[str], None] | None = None
+    on_completion_status: OnCompletionStatus | None = None
+    on_thrash_detected: OnThrashDetected | None = None

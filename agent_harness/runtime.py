@@ -10,28 +10,18 @@ from pathlib import Path
 from typing import Any
 
 from agent_harness.budget import Budget
-from agent_harness.display import (
-    show_budget,
-    show_completion_status,
-    show_delta,
-    show_response,
-    show_thinking_delta,
-    show_thrash_warning,
-    show_tool_call,
-    show_tool_result,
-)
 from agent_harness.hooks import Hooks
 from agent_harness.loops import registry as loop_registry
 from agent_harness.mcp_client import McpManager, McpServerSpec
 from agent_harness.permissions import PermissionDecision, Permissions
 from agent_harness.providers import registry as provider_registry
-from agent_harness.session import load_session
+from agent_harness.runtime_callbacks import _NullTracer, make_callbacks
+from agent_harness.session import Session
 from agent_harness.skills import load_skills
 from agent_harness.tools import (
     ToolRuntimeContext,
     build_tool_registry,
     discover_tools,
-    execute_tool,
     generate_schema,
 )
 from agent_harness.trace import Tracer
@@ -40,21 +30,15 @@ from agent_harness.types import (
     LoopCallbacks,
     Message,
     OnPlanApproval,
+    OutputSink,
     Response,
     ToolCall,
-    ToolResult,
-    Usage,
 )
 
 PermissionPromptFn = Callable[[ToolCall], PermissionDecision | bool]
 DomainPromptFn = Callable[[str], bool]
 
 logger = logging.getLogger(__name__)
-
-
-class _NullTracer:
-    def record(self, _event: str, **_data: object) -> None:
-        return
 
 
 def _build_mcp_tool_callable(manager: McpManager, server: str, name: str) -> Callable[..., str]:
@@ -141,13 +125,13 @@ class PreparedRuntime:
 
     def init_messages(
         self,
-        session_path: str | None = None,
+        session: Session | None = None,
         existing_messages: list[Message] | None = None,
     ) -> list[Message]:
-        """Load session or build a fresh message list for this agent.
+        """Load a session's history or build a fresh message list for this agent.
 
         Args:
-            session_path: Optional saved-session JSON path.
+            session: Optional already-resolved session to continue.
             existing_messages: Existing conversation state to continue, such as a handoff.
 
         Returns:
@@ -157,7 +141,7 @@ class PreparedRuntime:
             if existing_messages:
                 return existing_messages
             return [Message(role="system", content=build_system_prompt(self.config))]
-        messages = load_session(session_path) if session_path else []
+        messages = session.messages if session is not None else []
         if not messages:
             messages = [Message(role="system", content=build_system_prompt(self.config))]
         return messages
@@ -279,108 +263,6 @@ def deny_permission(_tool_call: ToolCall) -> PermissionDecision:
     return PermissionDecision.deny()
 
 
-def _make_callbacks(
-    budget: Budget,
-    hooks: Hooks,
-    permissions: Permissions,
-    tracer: Tracer | _NullTracer,
-    tool_registry: dict[str, Callable[..., str]],
-    max_output_chars: int,
-    show_output: bool,
-    stream: bool = False,
-    show_thinking: bool = False,
-    plan_prompt_fn: OnPlanApproval | None = None,
-    tmp_dir: str = "tmp",
-) -> LoopCallbacks:
-    def on_delta(_agent_id: str, text: str) -> None:
-        if show_output:
-            show_delta(text)
-
-    def on_thinking_delta(_agent_id: str, text: str) -> None:
-        if show_output and show_thinking:
-            show_thinking_delta(text)
-
-    def on_response(response: Response) -> None:
-        if show_output and not stream:
-            show_response(response)
-        tracer.record(
-            "turn",
-            stop_reason=response.stop_reason,
-            response=response.message.content,
-            input_tokens=response.usage.input_tokens,
-            output_tokens=response.usage.output_tokens,
-        )
-
-    def on_tool_call(tool_call: ToolCall) -> ToolResult:
-        if show_output:
-            show_tool_call(tool_call)
-        checked = hooks.run_before_tool(tool_call)
-        if checked is None:
-            tracer.record("tool_blocked", tool=tool_call.name, reason="safety_hook", args=tool_call.arguments)
-            result = ToolResult(tool_call_id=tool_call.id, error="Blocked by safety hook")
-            if show_output:
-                show_tool_result(result)
-            return result
-        if not permissions.check(checked):
-            tracer.record("tool_denied", tool=checked.name, reason="user_denied", args=checked.arguments)
-            result = ToolResult(tool_call_id=checked.id, error="Denied by user")
-            if show_output:
-                show_tool_result(result)
-            return result
-        tracer.record("tool_call", tool=checked.name, args=checked.arguments)
-        result = execute_tool(checked, max_output_chars=max_output_chars, tool_registry=tool_registry, tmp_dir=tmp_dir)
-        result = hooks.run_after_tool(checked, result)
-        tracer.record("tool_result", tool=checked.name, output=result.output, error=result.error)
-        if show_output:
-            show_tool_result(result)
-        return result
-
-    def on_budget(usage: Usage) -> bool:
-        exceeded = budget.record(usage)
-        if show_output:
-            summary = budget.summary()
-            summary += f" | {usage.input_tokens / 1000:.1f}k in / {usage.output_tokens / 1000:.1f}k out"
-            if exceeded:
-                summary += " — stopping (budget limit reached, task may be incomplete)"
-            show_budget(summary)
-        tracer.record("budget", summary=budget.summary(), exceeded=exceeded)
-        return exceeded
-
-    def is_budget_exceeded() -> bool:
-        return budget.is_exceeded()
-
-    def on_completion_status(verified: bool, detail: str) -> None:
-        if show_output:
-            show_completion_status(verified, detail)
-        tracer.record("completion_status", verified=verified, detail=detail)
-
-    def on_thrash_detected(tool_name: str, detail: str) -> None:
-        if show_output:
-            show_thrash_warning(tool_name, detail)
-        tracer.record("thrash_detected", tool=tool_name, detail=detail)
-
-    on_plan_approval: OnPlanApproval | None = None
-    if plan_prompt_fn is not None:
-        def _on_plan_approval(steps: list[str]) -> bool:
-            approved = plan_prompt_fn(steps)
-            tracer.record("plan_approval", steps=steps, approved=approved)
-            return approved
-        on_plan_approval = _on_plan_approval
-
-    return LoopCallbacks(
-        on_response=on_response,
-        on_tool_call=on_tool_call,
-        on_budget=on_budget,
-        get_budget_status=budget.status_note,
-        on_plan_approval=on_plan_approval,
-        on_delta=on_delta,
-        on_thinking_delta=on_thinking_delta,
-        on_completion_status=on_completion_status,
-        is_budget_exceeded=is_budget_exceeded,
-        on_thrash_detected=on_thrash_detected,
-    )
-
-
 def prepare_runtime(
     config: AgentConfig,
     *,
@@ -389,6 +271,7 @@ def prepare_runtime(
     plan_prompt_fn: OnPlanApproval | None = None,
     show_output: bool = True,
     trace_enabled: bool = True,
+    output_sink: OutputSink | None = None,
 ) -> PreparedRuntime:
     """Prepare everything needed to execute an agent consistently.
 
@@ -400,6 +283,9 @@ def prepare_runtime(
             generated plan before it executes. Inert if omitted.
         show_output: Whether response/tool panels should be rendered to the console.
         trace_enabled: Whether structured trace files should be written.
+        output_sink: Optional hooks for a non-console driver (e.g. an API
+            server) to receive run events. Fires alongside, not instead of,
+            the console display — inert (`None`) leaves CLI behavior unchanged.
 
     Returns:
         Prepared runtime object that can initialize messages, run the loop, and persist
@@ -446,7 +332,7 @@ def prepare_runtime(
     )
     permissions.load()
     budget = Budget(config)
-    callbacks = _make_callbacks(
+    callbacks = make_callbacks(
         budget,
         hooks,
         permissions,
@@ -458,6 +344,7 @@ def prepare_runtime(
         show_thinking=config.show_thinking,
         plan_prompt_fn=plan_prompt_fn,
         tmp_dir=str(tmp_dir),
+        output_sink=output_sink,
     )
     chat_fn = provider_registry[config.provider]
     loop_fn = loop_registry[config.loop]

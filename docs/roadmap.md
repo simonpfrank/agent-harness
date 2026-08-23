@@ -10,13 +10,11 @@ When an item ships, move it to the **Done** section at the bottom with a commit 
 
 Ranked list of everything currently committed to build (drawn from `Near-term Improvements` and `Plausible Future Capabilities` below — `Ideas`/`Scoped out`/`Rejected` stay unranked, not commitments). Ranking logic: quick wins first, then dependency order within a track. See each item's own detail section for the *why*.
 
-**Track A — Interface/access expansion** (multi-device, multi-task future — Echo/phone/Reachy, not just CLI):
-1. Permission/approval UX for no-terminal contexts — also covers plan-approval's (`_plan_prompt`) identical fragility, and the real `EOFError` crash hit live-testing (2026-08-16)
-2. API / async boundary (thin sync/threaded wrapper — not an asyncio core rewrite)
+**Track A — Interface/access expansion** (multi-device, multi-task future — Echo/phone/Reachy, not just CLI): shipped — see "HTTP API server" in Done below.
 
-**Track B — Single-task execution speed/quality** (separate from A — not about interfaces, about how well one task executes; soft-depends on Track A #1 only if approval-gated tools are involved):
-3. Parallel tool-call execution within a turn — has a concrete driving case (a research agent firing multiple fetches per turn)
-4. Parallel sub-agent fan-out — still no concrete driver, stays deferred
+**Track B — Single-task execution speed/quality** (soft-depends on the shipped API's approval mechanism only if approval-gated tools are involved):
+1. Parallel tool-call execution within a turn — has a concrete driving case (a research agent firing multiple fetches per turn)
+2. Parallel sub-agent fan-out — still no concrete driver, stays deferred
 
 **Shelved (2026-08-19), not in this ranking:** Adaptive re-planning — a full design exists (see Ideas below) but was pulled *during* plan mode when a direct check found zero example agents actually use `loop: plan_execute` yet. Investing in adaptation logic for an unused code path is exactly the "no code-level tweaks without hard evidence" mistake this project already corrected once (the prompt-override-file retraction). Next step before this returns to Priority Order: build and actually run a real `plan_execute`-based agent, see if the static-plan limitation genuinely bites.
 
@@ -132,43 +130,6 @@ which input mechanism is chosen.
 
 Not part of the sequence: **API/async boundary** is a standing design constraint ("if an API is ever added, keep async at the boundary"), not a buildable task — it activates only if something else creates a reason for an external API; conceptually the same "async phase" bucket as parallel fan-out above. **Lazy tool schema loading** doesn't clear this file's own benefit-vs-complexity bar (see its entry below) and isn't scheduled.
 
-### Permission/approval UX for no-terminal contexts (added 2026-08-15)
-
-**Status:** Active roadmap design — Priority Order #1
-
-**What:** `_permission_prompt`/`_domain_prompt`/`_plan_prompt` (`cli.py`)
-are all synchronous prompts that assume a human at a terminal. Any
-non-CLI interface (API, voice, Reachy) has no way to ask "may I do this?"
-and get an answer — and this isn't just an API-layer gap: it already
-applies to `plan_execute`'s existing plan-approval gate the same way it
-would to a new interface.
-
-**Why:** A hard blocker for the API/interface track, and made concretely
-worse (not just theoretically) by parallel tool-call execution — two
-tools needing approval in the same turn would race for one terminal
-prompt today.
-
-**Scope in roadmap terms:** not designed yet. Needs a real design
-decision (push-notify-and-wait, network-scoped tool allowlists that never
-need asking, something else) before or alongside API-boundary work.
-
-**Real evidence, not hypothetical (found 2026-08-16):** live-testing the
-`researcher` agent against a local LM Studio model with `--stream` hit an
-unhandled `EOFError` crash — `_domain_prompt` (`cli.py`) called
-`_console.input(...)` while stdin wasn't a live TTY, and the raw
-`EOFError` propagated all the way up through `hooks.py`/`runtime.py`/
-`react.py` with no handling anywhere in that chain, killing the whole
-process. Narrower than this item's main "no terminal at all" design
-question — this is CLI-mode prompts crashing raw instead of failing
-gracefully whenever stdin isn't interactive (piped, redirected,
-non-interactive automation), not just the "genuinely no terminal exists"
-case. Worth fixing as part of this item's eventual work (catch `EOFError`
-in `_permission_prompt`/`_domain_prompt`/`_plan_prompt`, default to deny
-with a clear message instead of an unhandled traceback) rather than
-separately — same root cause (prompts assume a live interactive human),
-same fix location. Deliberately not fixed standalone now — logged here to
-land alongside the interface work per the user's explicit call.
-
 ### Parallel sub-agent fan-out (added 2026-04-16)
 
 **Status:** Active roadmap design
@@ -181,73 +142,10 @@ land alongside the interface work per the user's explicit call.
 
 **Deep-dive design:** `docs/streaming-plan.md`
 
-**Note (2026-08-15):** reaffirmed as deferred — Priority Order #4, same
-track as parallel tool-call execution (Track B, below/in the
-Scoped-out-of-MCP backlog), separate from the interface-expansion track
-(Priority Order #1–2). Still no concrete driver.
-
-### API / async boundary (added 2026-04-16)
-
-**Status:** Active roadmap design
-
-**What:** If an external API is ever added, keep async at the boundary and avoid pre-emptively converting the harness core.
-
-**Why:** Async is a means to an end, not a feature. The main value would be serving external consumers cleanly, not making the core more complex.
-
-**Scope in roadmap terms:** API later, boundary-first async only, sync core by default.
-
-**Note (2026-08-15):** tightened after discussion — "async at the
-boundary" means thread/process-per-request, not asyncio. No asyncio
-anywhere (boundary or core) is justified without a real high-fan-out
-driver; parallel tool-call execution and parallel sub-agent fan-out are
-the two things that would actually justify it if either gets built at
-real scale. Priority Order #2 — depends on #1 (permission UX) and on
-concurrency-safety for per-agent-dir state (shipped 2026-08-19, see Done
-below) being solved first, since a service layer without either is
-unsafe to expose beyond localhost.
-
-**Note (2026-08-15), trigger-driven vs. request-response:** not every
-future caller is a human waiting live on the other end. A home-assistant
-use case eventually wants event-driven runs too — a sensor fires, an
-email arrives, a cron time hits, and the agent runs without anyone asking
-in the moment. Not a 4th interface — still goes through this same API (or
-the existing scriptable command-line mode, for local cron) — but a
-different call shape (fire-and-record-result vs. someone actively
-waiting), worth designing for from the start rather than assuming every
-request has an impatient human on the other end.
-
-**Deep-dive design:** `docs/streaming-plan.md`
-
-**Note (2026-08-19), real driver and its actual scope, clarified through
-discussion — don't build past this:** the concrete driver is now real —
-a separately-built web chat UI (not part of this repo), eventually
-Reachy Mini, possibly an Echo-via-AWS-Lambda proxy, all talking to
-whatever API this item builds; harness deployment location is flexible
-(Reachy's own Pi, a spare Pi 5, an always-on iMac, or a laptop
-temporarily for local-model serving). Initially escalated this to "needs
-real auth from day one" reasoning from the Echo/Lambda case (an
-internet-facing endpoint running `run_command`/`execute_code` with no
-auth is a genuine risk) — **corrected by the user**: current actual usage
-is home-LAN-reachable or, at work, local-to-one-machine only, not
-internet-facing — Echo/Lambda is a "one day might," not a current
-requirement, and building full auth (OAuth, token issuance/rotation,
-accounts) for a threat model that doesn't exist yet would repeat this
-project's own "no code-level tweaks without hard evidence" mistake, just
-applied to security infra instead of a feature.
-
-**Settled, right-sized shape:** a single shared-secret/API-key check (one
-header compared against a configured value) — genuinely cheap, and
-proportionate to the *real* current exposure: "LAN-reachable" already
-means more than just the user (other devices on a home network, other
-machines on an office network), so an unauthenticated endpoint isn't
-actually risk-free even without Echo/Lambda in the picture. Not throwaway
-work either — the same shared secret becomes the first real layer of
-proper auth later, since Lambda would need to know it to call in anyway.
-Pair with binding the server to `127.0.0.1` by default, not `0.0.0.0` —
-LAN-reachability becomes an explicit per-deployment opt-in, not an
-accidental default. Full auth (accounts, tokens, rotation) stays
-deliberately deferred until Echo/remote access is an actual plan, not
-built speculatively now.
+**Note (2026-08-15):** reaffirmed as deferred — Track B #2, same track as
+parallel tool-call execution (Track B #1, below/in the Scoped-out-of-MCP
+backlog), separate from the interface-expansion track (shipped — see
+"HTTP API server" in Done). Still no concrete driver.
 
 ### Evaluation framework (added 2026-04-16, shipped 2026-08-03)
 
@@ -970,6 +868,46 @@ Fixed three real races confirmed against actual code, all triggered by two concu
 Verified: `pytest tests/unit -q` → 684 passed (up from 644); ruff clean; `mypy --strict` clean (95 files); `radon cc --min D` → none. Real, zero-mock concurrency stress tests in `tests/integration/test_concurrency_safety.py` (`threading.Thread` + `threading.Barrier` to force genuine overlap, not staggered starts; final-state-only assertions, not timing-dependent) prove 500 concurrent writes to the same memory key and 500 concurrent writes to the same session file never produce a garbled/corrupt result. A parallel unit test (`test_concurrent_prepare_runtime_calls_get_isolated_tmp_dirs`) confirms 10 concurrent `prepare_runtime` calls each get a distinct `tmp_dir` with nothing clobbered.
 
 `docs/roadmap.md` Priority Order renumbered (Permission/approval UX for no-terminal contexts is now #1, API/async boundary #2, parallel tool-call execution #3, parallel sub-agent fan-out #4).
+
+### HTTP API server (added 2026-08-15 as two items — "Permission/approval UX for no-terminal contexts" and "API / async boundary" — merged and resolved 2026-08-22)
+
+Full requirements/architecture discussion first (`docs/api-plan.md`), since the two parent roadmap items turned out tightly coupled — designing the approval mechanism without first picking the transport shape would have meant redesigning it once the transport was chosen. Real driving clients established through that discussion: a separately-built web chat UI (not part of this repo), eventually Reachy Mini (voice, own STT/TTS), possibly an Echo-via-AWS-Lambda proxy "one day."
+
+**Transport:** one HTTP request per agent turn ("run"), held open, response streamed as Server-Sent Events. Client→server stays ordinary short requests: start a run, and a generic signal endpoint (`POST /runs/<run_id>/signal`, `{"approval_id", "decision"}`) for anything that needs to reach into an in-progress run — deliberately generic, not approval-specific, so real cancellation (deferred, see below) can reuse it later without a redesign. Thread-per-request, not asyncio — each held-open SSE connection is one thread blocked on I/O, genuinely idle not CPU-bound, and the real client count (a handful of devices) is nowhere near where that stops being fine. **Flask chosen over FastAPI**: FastAPI's real draw (Pydantic models, free interactive docs) means adopting Pydantic for a project that avoids it unless necessary, for a benefit (async-native performance) this design deliberately doesn't use; Flask's `stream_with_context` is the standard, singular SSE recipe, FastAPI's isn't.
+
+**New `agent_harness/api/` subpackage** (mirrors the `loops/` convention): `events.py` (`SseEvent`, `format_sse` — pure, no I/O), `registry.py` (`RunRegistry` — one class handles both session-exclusivity and approval-blocking, since splitting them into two separately-locked objects would make "claim a session slot" and "register a run" non-atomic, a real race), `callbacks.py` (API-specific implementations of the permission/domain/plan prompts and a new `OutputSink`, all wired to the registry), `routes.py` (Flask app, `create_app`/`serve`, new `agent-harness serve` subcommand on the existing CLI — architecturally a sibling of `cli.py`, not a separate package, both are thin drivers supplying their own callbacks to `prepare_runtime`).
+
+**Required, necessary scope expansion found during planning, not speculative:** `runtime.py`'s `on_delta`/tool-call/budget/thrash callbacks were hardwired to either print via `display.py` or no-op, with zero injection point for redirecting them elsewhere — confirmed by reading `_make_callbacks` directly. Closed with a new `OutputSink` dataclass (`types.py`) and an additive `output_sink` param on `prepare_runtime`, fully backward-compatible (CLI passes `None`, unaffected). `_make_callbacks` extracted into a new sibling module `runtime_callbacks.py` first, since `runtime.py` was already at 478/500 lines.
+
+**Session identity redesigned GUID-first**, mirroring Claude Code's session model: every session gets a GUID regardless of whether a human names it; a name is optional/cosmetic, resolved via a directory scan (no second index file to keep in sync). Breaking file-format change to `session.py` (bare message array → `{"id", "name", "messages"}`), no migration — accepted, pre-1.0 personal project, existing local session files are throwaway. CLI's `--session foo` UX is unchanged externally; GUID resolution happens transparently underneath. **One active connection per session at a time, enforced not just documented** — `save_session` overwrites the whole file rather than appending, so two genuinely concurrent writers to the same session would otherwise silently drop one writer's entire turn; a second run request against a session already in flight gets rejected (409).
+
+**Real bug caught by the end-to-end integration test, not found any other way:** the initial exclusivity check keyed on the *resolved* session's id — but resolving a session by name is itself a non-atomic find-or-create, so two concurrent first-time requests for the same never-before-used name each found nothing on disk and each created a distinct fresh id, never colliding in the registry at all. A real two-thread HTTP test against the live server proved both got `200` before the fix landed. Fixed: exclusivity is now claimed on the caller's *requested* identifier (the raw `session_id`/`session_name` from the request body) before any file lookup happens, not the identifier that lookup produces. A second real bug from the same test pass: the client had no way to learn a run's id to answer an approval — nothing in the SSE stream carried it. Fixed with an `X-Run-Id` response header set before the streaming body begins.
+
+**Approval waits time out** (5 minutes, default-deny on expiry) — a run blocked on an approval that never arrives releases its session lock instead of holding it forever, the same fail-safe instinct as the `EOFError` fix folded into this build (`_permission_prompt`/`_domain_prompt`/`_plan_prompt` now catch `EOFError` from non-interactive stdin and default-deny instead of crashing raw). `permissions.py::Permissions.save()` also swapped to `atomic_write_text` — a real gap the concurrency-safety work above had missed, same class of per-agent-dir race, folded in here since it was found while grounding this build in the real code.
+
+**Explicitly scoped out, not forgotten** (all captured in `docs/api-plan.md`): real cancellation execution (the signal endpoint's shape doesn't preclude it, but the harness has zero interrupt points in its loop code today — loop-level work, independent of this build); true suspend/resume of a run; full auth (accounts/tokens/OAuth) beyond the existing shared-secret header; agent create/delete/edit via the API (list/run only); websockets; reconnect gap-recovery.
+
+**Documented, not built:** any caller holding the shared secret can list/resume/run every agent and session — the same trust boundary the secret already grants for everything else, not a separate protection layer for sessions specifically. Must be stated plainly in `README.md`/`docs/features.md` — done as part of this same pass.
+
+Verified: `pytest tests/unit -q` → 762 passed (up from 684); ruff clean; `mypy --strict` clean (107 files); `radon cc --min D` → none. Real, zero-mock, end-to-end integration tests (`tests/integration/test_api_server.py`) against a real Flask app on a real socket (`werkzeug.serving.make_server`, real `httpx` client): a genuine SSE run against the live Anthropic API streaming real `delta`/`done` events; the concrete concurrency proof (two real barrier-adjacent threads racing a `POST` against the same session name — exactly one `200` and one `409`, on-disk session file has exactly one new turn, not silently dropped); a real approval round trip (two separate live connections — one blocked mid-run on `registry.await_signal`, a second answers it, the first then reaches `done`, not the timeout-driven default-deny path); real auth rejection. `docs/roadmap.md` Priority Order collapsed (Track A shipped; Track B renumbered to #1/#2), `docs/api-plan.md` status updated, `docs/features.md`/`README.md` updated with the new `serve` subcommand and the shared-secret trust-boundary statement.
+
+**Same-day fix from real usage, not a code review catch (2026-08-22):** hit live within minutes of shipping — a config.yaml typo (`stream:true`, no space) raised `yaml.YAMLError` inside `config_loader.load()`, which `_handle_start_run` only caught as `FileNotFoundError`, so it leaked a raw, message-free Werkzeug 500 HTML page. Worse, found while fixing that: `_run_worker` only wrapped `run_messages()` in `except RuntimeError` — any exception earlier in the function (`prepare_runtime` itself failing config validation, e.g.) went completely uncaught in the background thread, silently hanging the client on heartbeats forever with the session's exclusivity lock stuck busy permanently, since `_sse_stream` only calls `end_run()` after seeing a `done`/`error` event that would now never arrive. Fixed: `_handle_start_run` catches any config-load exception and returns a clean `400` with the real message; `_run_worker` split into a thin outer wrapper (catches anything, logs the full traceback via `logger.exception`, guarantees an `error` event always reaches the client) around the existing `_execute_run` logic. Also: `serve()` now calls `setup_logging()` (new `--verbose` flag) so the terminal running `agent-harness serve` shows properly formatted logs instead of relying on Python's bare fallback handler — a real "I can see no logs" gap raised directly by live use, not anticipated in the original design. Verified against the exact original failure (temporarily reintroduced the same YAML typo against the live running server, confirmed a clean JSON error and a visible traceback in the log, restored the fix) and with two new tests (`TestWorkerFailureSafety`, using `tests/data/invalid_agent_bad_provider` to trigger a real `prepare_runtime`-time failure) proving the session lock releases correctly. `pytest tests/unit -q` → 765 passed; ruff/mypy/radon unchanged, still clean.
+
+**Second same-day fix, a genuinely different bug (2026-08-22):** the API/chat client appeared to hang indefinitely on a real local LM Studio thinking model (`qwen3-4b-thinking-2507`) for anything but the simplest prompts — diagnosed with real curl tests, timestamped and cross-checked against LM Studio's own server log (not guessed): the request genuinely reached LM Studio and was genuinely streaming the whole time, confirmed by pulling LM Studio's raw SSE response directly, which showed thinking-model reasoning arriving on a separate `reasoning_content` delta field, distinct from `content`. `openai_provider.py::_stream_chat_completions_deltas` (and `_chat_completions_to_response`, the non-streaming path) only ever read `delta.content` — every reasoning token was silently discarded, no `on_thinking_delta` fired, so the harness (and therefore the API and any client) sat in total silence for as long as the model thought, indistinguishable from a real hang. Compare `anthropic.py::_stream_deltas`, which already handles Claude's extended thinking correctly — this was a real, confirmed gap specific to the OpenAI-compatible Chat Completions path, not a design decision. Also confirmed live: a real response can exhaust `max_tokens` entirely on thinking before any real content (`finish_reason: "length"`, `content: ""`) — previously surfaced as a silent empty answer, not even an error.
+
+Fixed: both functions now read `reasoning_content` via `getattr(..., None)` (safe for real hosted OpenAI responses, which simply don't have the field), accumulate it into `Message.thinking`, and the streaming path fires `on_thinking_delta` per chunk — mirroring the Anthropic implementation exactly. `content` now normalizes empty-string-only to `None` in both paths (previously only the streaming path did this), so an all-thinking response is distinguishable from a genuine empty answer. `chat()` threads a new `on_thinking_delta` kwarg through to the streaming path. Deliberately not touched: the Responses API streaming path (`_stream_responses_deltas`, hosted OpenAI reasoning models) — no confirmed evidence of its reasoning-delta event name, and guessing one risked either dead code or a silently-wrong implementation; left as a documented gap, not fixed on assumption.
+
+Real end-to-end verification, not just unit tests: re-ran the exact prompt that originally looked hung against the live running server after the fix — `thinking_delta` events started arriving within ~2 seconds instead of nothing but heartbeats for 2+ minutes. `pytest tests/unit -q` → 769 passed; ruff/mypy/radon clean. New tests in `tests/unit/test_provider_openai.py::TestChatCompletionsStreaming` (reasoning deltas fire `on_thinking_delta` not `on_delta`, all-thinking response leaves `content=None`, missing callback doesn't raise) and `TestToResponse` (non-streaming reasoning populates `thinking`).
+
+**Third same-day fix pass, three related run-lifecycle bugs found via live dogfooding against the local LM Studio model, not code review (2026-08-23):**
+
+1. **Double-terminal-event crash.** `_execute_run` pushed an `error` event on a `RuntimeError` from `run_messages`, then fell through and pushed a `done` event too — but `_sse_stream` already calls `registry.end_run()` on the first terminal event it sees, so the second push hit an already-unregistered run and raised `UnknownRunError`, uncaught, crashing the worker thread. Found from a real captured server log: three chained tracebacks, all `UnknownRunError`, correlated against an `ExplicitModelUnloadError` in LM Studio's own log at the same timestamp. Fixed with an `errored` flag on `_execute_run`, returning immediately after the `error` push instead of falling through to `done`; `_run_worker`'s own crash-safety-net push also wrapped in `contextlib.suppress(UnknownRunError)` for the same reason — it can legitimately fire after the run's already ended.
+2. **Missing immediate first SSE event.** `_sse_stream`'s first action blocked on `registry.pop_event(timeout=15.0)` — nothing was yielded, not even HTTP headers (Werkzeug doesn't flush a streaming response's headers until the generator produces its first chunk), until either a real event arrived or the full 15s heartbeat interval elapsed. Found by measuring a real captured trace (an exact 15.005s gap between request sent and `HTTP 200` received) plus a fresh live report of an 8s gap on a different prompt. Fixed by yielding an immediate `heartbeat` before entering the wait loop. Test measured the exact pre-fix 15.005s delay, confirming the mechanism precisely before fixing it.
+3. **Session lock never released on client disconnect, and separately, never released if no reader ever connects.** Two related gaps in the same area, found from the user's own test plan (kill `chat/cli.py` mid-response with Ctrl-C, then immediately retry): (a) if a client disconnected mid-stream (closed terminal, dropped network, `SIGINT`), `_sse_stream`'s generator was torn down via `GeneratorExit` before it ever saw a terminal event, so `end_run()` never ran — the session stayed locked until the abandoned run happened to finish on its own, confirmed live to survive a laptop sleep/wake and an LM Studio model unload/reload; (b) structurally, if no reader ever connected to consume the stream at all, nothing called `end_run()` either, for the same underlying reason. Fixed both at once: `_run_worker` now calls `registry.end_run(run_id)` unconditionally in its own `finally` (independent of whether any reader exists), and `_sse_stream`'s entire body (not just its loop) is wrapped in `try:/finally: registry.end_run(run_id)` so a `GeneratorExit` at any point — including the very first yield — releases the lock immediately rather than relying on the worker's backstop to eventually catch up. `end_run` is already idempotent (pop-with-default), so both call sites firing is always safe.
+
+Verified end-to-end against the real running server, not just unit tests: a real `chat/cli.py` subprocess sent a real `SIGINT` mid-stream, force-killed, then a fresh request against the exact same session name — confirmed `200` and immediate streaming, not `409`. `pytest tests/unit -q` → 780 passed; ruff/mypy --strict/radon cc --min D all clean. New tests: `TestDoubleTerminalEventBug`, `TestImmediateFirstEvent` (including the 15.005s pre-fix timing measurement), `TestSessionLockReleasedWithoutAReader`, `TestLockReleasedOnClientDisconnect` — all in `tests/unit/test_api_routes.py`.
+
+**Deliberate sequencing decision, not yet acted on:** real cancellation (aborting in-flight work, not just releasing the lock) stays deferred per the existing "Explicitly scoped out" note above — these three fixes only make an already-abandoned run's *lock* release promptly; they don't make the abandoned run stop doing work. Discussed directly with the user: client crashes are realistically frequent this early in dogfooding, real interruption is real, non-trivial work (the loop layer has zero interrupt points today), and the two aren't the same problem — lock release was worth fixing now (cheap, testable via Ctrl-C), real stop is worth building once there's a working Streamlit app in daily use to want it against.
 
 ### Step-level tool-call thrashing breaker (added 2026-08-15, resolved 2026-08-15)
 

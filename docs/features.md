@@ -34,12 +34,25 @@ enough time has passed — it's a snapshot, not a live view.
   before parsing; `stop_reason` is derived the same way as the
   non-streaming path (presence of tool calls), not from the API's own
   `finish_reason`, so streaming and non-streaming behave identically.
-- **Extended thinking** (Anthropic only) — `provider_kwargs.thinking:
-  {budget_tokens: N}` enables Claude's extended thinking. Validated
-  (budget ≥1024, < max_tokens, incompatible with `temperature`/`top_p`).
-  Thinking content captured in `Message.thinking`/`thinking_blocks`, hidden
-  from the CLI by default (`show_thinking: false`), round-tripped correctly
-  through multi-turn tool-use continuations.
+  Reasoning-model backends reached via `base_url` (e.g. a local LM Studio
+  thinking model) stream thinking on a separate `reasoning_content` delta
+  field — read via `getattr(..., None)` (real hosted OpenAI responses
+  simply don't have it) and fires `on_thinking_delta` exactly like
+  Anthropic's extended thinking; confirmed directly against a real LM
+  Studio response, not assumed. Fixed 2026-08-22 — previously silently
+  dropped, which meant a slow-thinking local model looked identically
+  hung to a real one, since nothing distinguished "the model is genuinely
+  thinking" from "the connection died." Not yet done for the hosted
+  Responses API's own reasoning models — no confirmed event name for
+  reasoning deltas there, left as a documented gap rather than guessed.
+- **Extended thinking** (Anthropic, via `provider_kwargs.thinking:
+  {budget_tokens: N}`; OpenAI-compatible reasoning models, automatically
+  whenever the backend streams `reasoning_content`, no config needed).
+  Anthropic's is validated (budget ≥1024, < max_tokens, incompatible with
+  `temperature`/`top_p`). Thinking content captured in
+  `Message.thinking`/`thinking_blocks`, hidden from the CLI by default
+  (`show_thinking: false`), round-tripped correctly through multi-turn
+  tool-use continuations.
 - **Retry logic** (`providers/retry.py`) — shared across both providers.
   Exponential backoff (1s/2s/4s) on transient API errors, immediate failure
   with a clear message on auth errors, no retry on bad-request errors.
@@ -405,7 +418,8 @@ Full PRD + as-built spec in `docs/multimodal-plan.md`. Two capabilities:
   support" above), `completion_check` (see "Verified completion" above),
   `thrash_threshold` (see "Agent loops" above — on by default, 3).
 - **CLI** (`cli.py`) — `agent-harness run <dir> [prompt]` (single-shot or
-  REPL if no prompt), `agent-harness init <name>` (scaffold a new agent).
+  REPL if no prompt), `agent-harness init <name>` (scaffold a new agent),
+  `agent-harness serve` (HTTP API server — see below).
   Per-run overrides for every major config field via flags (`--provider`,
   `--model`, `--temperature`, `--stream`, `--show-thinking`, etc.).
 - **Scaffolding** (`scaffold.py`) — `init` generates a minimal
@@ -414,6 +428,22 @@ Full PRD + as-built spec in `docs/multimodal-plan.md`. Two capabilities:
   provider/tool/loop names, `max_turns < 1`, `stream`/`thinking` on
   providers that don't support them (only `anthropic` + `openai` for
   stream, `anthropic` only for thinking) at load time, before any API call.
+
+## HTTP API server (`agent_harness/api/`)
+
+`agent-harness serve [--host 127.0.0.1] [--port 8420] [--agents-dir agents]` — a second driver alongside `cli.py`, architecturally identical: both wire terminal I/O or HTTP/SSE to the same `prepare_runtime` callback functions. Lets remote clients (a separately-built chat UI, Reachy Mini, voice devices) run any agent by name, stream a turn's progress, and answer tool/domain/plan approval prompts, without a terminal. Full design/requirements background: `docs/api-plan.md`.
+
+- **`GET /agents`** — lists available agent names (`config.py::list_agent_names`, scans `<agents_dir>/*/config.yaml`).
+- **`POST /agents/<name>/runs`** — starts one turn. Body: `{"message": str, "session_id"?: str, "session_name"?: str}`. Response is `text/event-stream` (Server-Sent Events), held open for the run's duration, plus an `X-Run-Id` header — the only place a client learns the run's id, needed to answer any approval it raises. Returns `404` for an unknown agent, `400` for a missing message, `409` if the target session already has a run in flight.
+- **`POST /runs/<run_id>/signal`** — answers a pending approval. Body: `{"approval_id": str, "decision": str}`. `202` on success, `404` if the run or approval id doesn't match anything currently pending.
+- **SSE event types**: `delta`/`thinking_delta` (answer/thinking text chunks), `tool_call`/`tool_result` (full parity with what a CLI user already sees — not just streaming text), `budget`, `thrash_warning`, `approval_needed` (blocks the run; carries `approval_id` + a `kind` of `tool`/`domain`/`plan` and the relevant fields), `heartbeat` (idle keep-alive, 15s default — lets a client tell "still working" apart from "connection died"; the *first* one is sent immediately when the connection opens, before any wait — otherwise the WSGI layer has nothing to flush until the model produces its first real token, so a client sees no response at all, not even HTTP headers, for however long that takes; confirmed live, 2026-08-23, up to 15s of total silence on a connection that was already fully alive), `done` (final: `verified`/`detail`/`budget_summary`/`final_text`/`session_id`/`session_name`), `error`.
+  **`thinking_delta` is sent unconditionally, regardless of the agent's `show_thinking` config value** — that setting only gates whether the *standard CLI's own console* prints thinking (`cli.py`'s `show_output`/`show_thinking` check); it has no effect on what the API emits. Deliberate: the harness's job is to expose what's happening, not decide what a given client should render. A client that doesn't want to show thinking (e.g. a voice UI) filters `thinking_delta` on its own side rather than relying on the agent's config to suppress it — confirmed directly (2026-08-22): a misspelled `show_thinking` key in an agent's config silently defaulted to `False` with no warning, and the API kept sending thinking deltas the whole time regardless, exactly as designed.
+- **Concurrency model**: thread-per-request, not asyncio — each held-open SSE connection is one thread blocked on I/O. Deliberate, revisit only if a real high-fan-out driver emerges (matches the same bar set for parallel tool-call execution/sub-agent fan-out, below).
+- **Session identity is GUID-first** (`session.py`, mirrors Claude Code's session model) — every session gets a GUID regardless of whether it's named; a name is optional/cosmetic, resolved via a directory scan, never the file's actual key. One active run per session, enforced (a second concurrent request against a session already in flight gets `409`) — `save_session` overwrites the whole file rather than appending, so without this a genuinely concurrent second writer could silently drop the first one's entire turn.
+- **Approval waits time out** (5 minutes, default-deny past that) rather than holding a session's lock forever if a client vanishes mid-approval.
+- **Auth: a single shared-secret header** (`X-API-Key`, checked via `secrets.compare_digest`), read from `AGENT_HARNESS_API_KEY`; server binds to `127.0.0.1` by default. **Trust boundary, stated plainly, not left implicit:** anyone holding a valid key can list, resume, and run *every* agent and *every* session — session access has no separate protection layer beyond the same secret that already grants everything else. Full auth (accounts, tokens, rotation) is deliberately not built — right-sized for the current LAN-only/single-machine deployment, not an oversight.
+- **Deliberately not built yet** (see `docs/api-plan.md` for the reasoning behind each): real cancellation (the signal endpoint's shape doesn't preclude adding it, but the harness has no loop-level interrupt points today), true suspend/resume of a dropped connection, agent create/delete/edit via the API (list/run only), websockets.
+- **Why Flask, not FastAPI**: FastAPI's real advantage is Pydantic-based request models plus free interactive docs — adopting it here would mean pulling in Pydantic for a project that avoids it unless necessary, in exchange for async-native performance this design deliberately doesn't use (thread-per-request, not asyncio, is the whole point). Flask's `stream_with_context` is the standard, singular way to stream a response; FastAPI's SSE story leans on a third-party package instead.
 
 ## Evaluation framework (`eval/`)
 

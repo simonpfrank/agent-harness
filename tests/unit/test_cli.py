@@ -10,6 +10,7 @@ from agent_harness.cli import (
     _domain_prompt,
     _permission_prompt,
     _plan_prompt,
+    main,
     parse_args,
     run_agent,
     validate_config,
@@ -47,6 +48,44 @@ class TestParseArgs:
     def test_max_cost_override(self) -> None:
         args = parse_args(["run", "./agents/hello", "--max-cost", "0.02"])
         assert args.max_cost == 0.02
+
+    def test_timing_flag_defaults_false(self) -> None:
+        args = parse_args(["run", "./agents/hello"])
+        assert args.timing is False
+
+    def test_timing_flag_set(self) -> None:
+        args = parse_args(["run", "./agents/hello", "--timing"])
+        assert args.timing is True
+
+    def test_serve_defaults(self) -> None:
+        args = parse_args(["serve"])
+        assert args.command == "serve"
+        assert args.host == "127.0.0.1"
+        assert args.port == 8420
+        assert args.agents_dir == "agents"
+
+    def test_serve_overrides(self) -> None:
+        args = parse_args(["serve", "--host", "0.0.0.0", "--port", "9000", "--agents-dir", "custom"])
+        assert args.host == "0.0.0.0"
+        assert args.port == 9000
+        assert args.agents_dir == "custom"
+
+
+class TestMainServeDispatch:
+    @patch("agent_harness.cli.serve")
+    @patch("sys.argv", ["agent-harness", "serve", "--port", "9001"])
+    def test_dispatches_to_serve_with_parsed_args(self, mock_serve: MagicMock) -> None:
+        main()
+        mock_serve.assert_called_once_with(
+            host="127.0.0.1", port=9001, agents_dir="agents", api_key=None, verbose=False,
+        )
+
+    @patch("agent_harness.cli.serve")
+    @patch.dict("os.environ", {"AGENT_HARNESS_API_KEY": "secret"})
+    @patch("sys.argv", ["agent-harness", "serve"])
+    def test_reads_api_key_from_environment(self, mock_serve: MagicMock) -> None:
+        main()
+        assert mock_serve.call_args.kwargs["api_key"] == "secret"
 
     def test_temperature_override(self) -> None:
         args = parse_args(["run", "./agents/hello", "--temperature", "0.0"])
@@ -296,6 +335,27 @@ class TestPlanPromptMarkup:
         assert _plan_prompt(["Do it"]) is False
 
 
+class TestNonInteractiveStdinFailsSafe:
+    """`_console.input` raises EOFError when stdin isn't a live TTY (piped
+    input, non-interactive automation) — must default-deny, not crash."""
+
+    @patch("agent_harness.cli._console")
+    def test_permission_prompt_denies_on_eof(self, mock_console: MagicMock) -> None:
+        mock_console.input.side_effect = EOFError
+        decision = _permission_prompt(ToolCall(id="1", name="run_command", arguments={}))
+        assert decision.approved is False
+
+    @patch("agent_harness.cli._console")
+    def test_domain_prompt_denies_on_eof(self, mock_console: MagicMock) -> None:
+        mock_console.input.side_effect = EOFError
+        assert _domain_prompt("example.com") is False
+
+    @patch("agent_harness.cli._console")
+    def test_plan_prompt_denies_on_eof(self, mock_console: MagicMock) -> None:
+        mock_console.input.side_effect = EOFError
+        assert _plan_prompt(["Do it"]) is False
+
+
 def _bright_spans(prompt: Text, style: str = "bold cyan") -> list[str]:
     """Extract the substrings styled `style` from a prompt Text, in order."""
     return [prompt.plain[span.start : span.end] for span in prompt.spans if span.style == style]
@@ -369,6 +429,80 @@ class TestRunAgent:
         mock_config.load.side_effect = FileNotFoundError("not found")
         with pytest.raises(SystemExit):
             run_agent("/bad/path", prompt="test")
+
+    @patch("agent_harness.cli.prepare_runtime")
+    @patch("agent_harness.cli.config_loader")
+    def test_timing_passes_an_output_sink_and_disables_normal_display(
+        self,
+        mock_config: MagicMock,
+        mock_prepare_runtime: MagicMock,
+    ) -> None:
+        cfg = AgentConfig(
+            name="test", provider="anthropic", model="claude-haiku-4-5-20251001",
+            agent_dir="/tmp/test", instructions="Be helpful", max_turns=5,
+        )
+        runtime = MagicMock()
+        runtime.init_messages.return_value = []
+        mock_config.load.return_value = cfg
+        mock_prepare_runtime.return_value = runtime
+
+        run_agent("./agents/hello", prompt="hi", timing=True)
+
+        _, kwargs = mock_prepare_runtime.call_args
+        assert kwargs["show_output"] is False
+        assert kwargs["output_sink"] is not None
+
+    @patch("agent_harness.cli.prepare_runtime")
+    @patch("agent_harness.cli.config_loader")
+    def test_timing_off_by_default_keeps_normal_display(
+        self,
+        mock_config: MagicMock,
+        mock_prepare_runtime: MagicMock,
+    ) -> None:
+        cfg = AgentConfig(
+            name="test", provider="anthropic", model="claude-haiku-4-5-20251001",
+            agent_dir="/tmp/test", instructions="Be helpful", max_turns=5,
+        )
+        runtime = MagicMock()
+        runtime.init_messages.return_value = []
+        mock_config.load.return_value = cfg
+        mock_prepare_runtime.return_value = runtime
+
+        run_agent("./agents/hello", prompt="hi")
+
+        _, kwargs = mock_prepare_runtime.call_args
+        assert kwargs["show_output"] is True
+        assert kwargs["output_sink"] is None
+
+    @patch("agent_harness.cli.prepare_runtime")
+    @patch("agent_harness.cli.config_loader")
+    def test_timing_sink_prints_timestamped_delta_and_thinking_lines(
+        self,
+        mock_config: MagicMock,
+        mock_prepare_runtime: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        cfg = AgentConfig(
+            name="test", provider="anthropic", model="claude-haiku-4-5-20251001",
+            agent_dir="/tmp/test", instructions="Be helpful", max_turns=5,
+        )
+        runtime = MagicMock()
+        runtime.init_messages.return_value = []
+        mock_config.load.return_value = cfg
+        mock_prepare_runtime.return_value = runtime
+
+        run_agent("./agents/hello", prompt="hi", timing=True)
+
+        sink = mock_prepare_runtime.call_args.kwargs["output_sink"]
+        assert sink.on_delta is not None
+        assert sink.on_thinking_delta is not None
+        sink.on_thinking_delta("default", "pondering")
+        sink.on_delta("default", "answer")
+        out = capsys.readouterr().out
+        assert "THINK" in out
+        assert "pondering" in out
+        assert "ANSWER" in out
+        assert "answer" in out
 
     @patch("agent_harness.cli.prompt_user")
     @patch("agent_harness.cli.prepare_runtime")

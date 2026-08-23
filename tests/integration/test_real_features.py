@@ -15,7 +15,7 @@ from agent_harness.config import load
 from agent_harness.hooks import Hooks
 from agent_harness.loops import registry as loop_registry
 from agent_harness.providers import registry as provider_registry
-from agent_harness.session import load_session, save_session
+from agent_harness.session import Session, load_session, save_session
 from agent_harness.skills import load_skills
 from agent_harness.tools import (
     discover_tools,
@@ -62,14 +62,15 @@ class TestSessionPersistence:
 
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
             path = f.name
-        save_session(messages, path)
+        save_session(Session(id="test-session", name=None, messages=messages), path)
         loaded = load_session(path)
         Path(path).unlink()
 
-        assert len(loaded) >= 3  # system + user + at least one assistant
-        assert loaded[0].role == "system"
-        assert loaded[1].role == "user"
-        assert any(m.role == "assistant" for m in loaded)
+        assert loaded is not None
+        assert len(loaded.messages) >= 3  # system + user + at least one assistant
+        assert loaded.messages[0].role == "system"
+        assert loaded.messages[1].role == "user"
+        assert any(m.role == "assistant" for m in loaded.messages)
 
 
 @requires_api_key

@@ -305,6 +305,8 @@ python -m agent_harness run ./agents/hello --session research
 
 Agents with `save_memory` and `recall_memory` tools can persist information in `{agent_dir}/memory/`. The LLM decides what to remember — no automatic memory.
 
+Under the hood, a session's real identity is a GUID, not the `--session` name — the name is just a label resolved on lookup (`{agent_dir}/sessions/{guid}.json`, not `{name}.json`). This doesn't change the `--session` flag's behavior at all; it's what lets the HTTP API server (below) address sessions safely without two different callers ever colliding on the same unqualified name.
+
 ## Providers
 
 | Provider | Config value | Models | Notes |
@@ -381,6 +383,30 @@ mcp_servers:
 Every tool the server exposes gets merged into the agent's tool list automatically — no need to hand-enumerate them in `tools:`. If a tool name collides with one this agent already exposes (built-in or custom), the harness's own version wins; anything not already claimed comes from MCP. Add a name to `tools:` at any time to "claim" it for the harness's own implementation instead — no MCP config change needed.
 
 stdio (local subprocess) transport only for now — see `docs/roadmap.md` for what's deliberately not built yet (remote HTTP/SSE servers, MCP server mode).
+
+## HTTP API Server
+
+`agent-harness serve` runs a second driver alongside the CLI — HTTP/SSE instead of terminal I/O, wired to the same runtime underneath. Lets a remote client (a separately-built chat UI, Reachy Mini, a voice device) run any agent, watch a turn stream in real time, and answer tool/domain/plan approval prompts without a terminal.
+
+```bash
+export AGENT_HARNESS_API_KEY=some-shared-secret   # optional but strongly recommended — see below
+agent-harness serve --host 127.0.0.1 --port 8420 --agents-dir agents
+```
+
+```bash
+curl -N -X POST http://127.0.0.1:8420/agents/hello/runs \
+  -H "X-API-Key: some-shared-secret" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "hi", "session_name": "my-chat"}'
+```
+
+Response is a held-open `text/event-stream`: `delta`/`thinking_delta` chunks as the model talks, `tool_call`/`tool_result`/`budget`/`thrash_warning` events (the same visibility a CLI user already gets — not just answer text), `heartbeat` every 15s when there's nothing else to send, `approval_needed` if a tool/domain/plan approval is required (answer it via `POST /runs/<run_id>/signal` — the run's id comes back on the initial response's `X-Run-Id` header), and a final `done` event. `GET /agents` lists what's available to run.
+
+**Security — read this before exposing beyond `localhost`.** Auth is a single shared-secret header (`X-API-Key`, from `AGENT_HARNESS_API_KEY`), checked in constant time. **Anyone holding a valid key can list, resume, and run every agent and every session on this server** — there is no per-user or per-session isolation on top of that secret; it grants everything the harness can do, the same way a working `--session` name in the CLI does. That's a deliberate, right-sized tradeoff for the current deployment model (home LAN or a single work machine, not internet-facing), not an oversight — full multi-user auth (accounts, tokens, rotation) is intentionally not built. The server binds to `127.0.0.1` by default; opening it up to a LAN is an explicit `--host` choice, not the default.
+
+Sessions get a GUID identity under the hood (mirrors Claude Code's session model) — a `session_name` you pass is just a label resolved on lookup, never the file's real key, so two different callers can never collide on an unqualified name. Only one run at a time is allowed per session; a second concurrent request against the same session gets `409` rather than silently racing.
+
+Full design background and what's deliberately deferred (real mid-run cancellation, full auth, agent management via the API, websockets): `docs/api-plan.md`.
 
 ## Verified Completion
 

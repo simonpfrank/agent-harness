@@ -11,6 +11,7 @@ from typing import Any
 
 import yaml
 
+from agent_harness.atomic_write import atomic_write_text
 from agent_harness.types import ToolCall
 
 logger = logging.getLogger(__name__)
@@ -148,7 +149,7 @@ class Permissions:
             persist = Path(self._persist_path)
             persist.parent.mkdir(parents=True, exist_ok=True)
             approved = sorted(self._persistent_approved)
-            persist.write_text(yaml.dump({"approved": approved}))
+            atomic_write_text(persist, yaml.dump({"approved": approved}))
             self._dirty = False
         except OSError:
             logger.warning("Could not save permissions to %s", self._persist_path)

@@ -1,8 +1,10 @@
 """Tests for agent_harness.config."""
 
+from pathlib import Path
+
 import pytest
 
-from agent_harness.config import load
+from agent_harness.config import list_agent_names, load
 
 VALID = "tests/data/valid_agent"
 NO_INSTRUCTIONS = "tests/data/invalid_agent_no_instructions"
@@ -91,3 +93,22 @@ class TestLoadInvalid:
     def test_nonexistent_dir(self) -> None:
         with pytest.raises(FileNotFoundError):
             load("/no/such/agent")
+
+
+class TestListAgentNames:
+    def test_lists_sorted_agent_names(self, tmp_path: Path) -> None:
+        agents_dir = tmp_path / "agents"
+        for name in ("zeta", "alpha", "mid"):
+            (agents_dir / name).mkdir(parents=True)
+            (agents_dir / name / "config.yaml").write_text("name: " + name)
+        assert list_agent_names(str(agents_dir)) == ["alpha", "mid", "zeta"]
+
+    def test_ignores_dirs_without_config_yaml(self, tmp_path: Path) -> None:
+        agents_dir = tmp_path / "agents"
+        (agents_dir / "real").mkdir(parents=True)
+        (agents_dir / "real" / "config.yaml").write_text("name: real")
+        (agents_dir / "not-an-agent").mkdir(parents=True)
+        assert list_agent_names(str(agents_dir)) == ["real"]
+
+    def test_empty_when_dir_does_not_exist(self, tmp_path: Path) -> None:
+        assert list_agent_names(str(tmp_path / "never-created")) == []
