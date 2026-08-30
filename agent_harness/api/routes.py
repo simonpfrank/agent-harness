@@ -7,7 +7,6 @@ HTTP/SSE instead of terminal I/O.
 
 from __future__ import annotations
 
-import contextlib
 import logging
 import secrets
 import threading
@@ -26,7 +25,7 @@ from agent_harness.api.callbacks import (
     make_permission_prompt,
     make_plan_prompt,
 )
-from agent_harness.api.events import DONE, ERROR, SseEvent, format_sse
+from agent_harness.api.events import CANCELLED, DONE, ERROR, SseEvent, format_sse
 from agent_harness.api.registry import RunRegistry, SessionBusyError, UnknownRunError
 from agent_harness.log import setup_logging
 from agent_harness.runtime import prepare_runtime
@@ -157,8 +156,7 @@ def _run_worker(
         # The run may have already ended (a terminal event was pushed and
         # the reader already released it) before this crashed — nothing
         # left to tell, and nothing left to clean up.
-        with contextlib.suppress(UnknownRunError):
-            registry.push_event(run_id, SseEvent(ERROR, {"message": f"Internal error: {exc}"}, seq.next()))
+        registry.try_push_event(run_id, SseEvent(ERROR, {"message": f"Internal error: {exc}"}, seq.next()))
     finally:
         registry.end_run(run_id)
 
@@ -182,6 +180,7 @@ def _execute_run(
         show_output=False,
         trace_enabled=True,
         output_sink=output_sink,
+        is_cancelled_fn=lambda: registry.is_cancelled(run_id),
     )
     messages = runtime.init_messages(session=session)
     final_text: str | None = None
@@ -190,7 +189,7 @@ def _execute_run(
         final_text = runtime.run_messages(messages, prompt=message)
     except RuntimeError as exc:
         logger.warning("Run %s failed during execution: %s", run_id, exc)
-        registry.push_event(run_id, SseEvent(ERROR, {"message": str(exc)}, seq.next()))
+        registry.try_push_event(run_id, SseEvent(ERROR, {"message": str(exc)}, seq.next()))
         errored = True
     if session is not None:
         session.messages = messages
@@ -204,7 +203,8 @@ def _execute_run(
         # of ending cleanly. Real bug, found live: an LM Studio model
         # reload failure triggered exactly this.
         return
-    registry.push_event(run_id, SseEvent(DONE, {
+    terminal_event = CANCELLED if registry.is_cancelled(run_id) else DONE
+    registry.try_push_event(run_id, SseEvent(terminal_event, {
         "verified": completion_status.verified,
         "detail": completion_status.detail,
         "budget_summary": runtime.budget.summary(),
@@ -236,13 +236,19 @@ def _sse_stream(registry: RunRegistry, run_id: str) -> Generator[str, None, None
                 heartbeat_seq -= 1
                 continue
             yield format_sse(event)
-            if event.event in (DONE, ERROR):
+            if event.event in (DONE, CANCELLED, ERROR):
                 return
     finally:
         registry.end_run(run_id)
 
 
 def _handle_signal(registry: RunRegistry, run_id: str, body: dict[str, Any]) -> tuple[Response, int]:
+    if body.get("type") == "cancel":
+        # No-op on an unknown/already-finished run — the caller's intent
+        # (this run should stop) is trivially already satisfied, not an error.
+        registry.request_cancel(run_id)
+        return jsonify({"status": "ok"}), 202
+
     approval_id = body.get("approval_id")
     decision = body.get("decision")
     if not approval_id or not decision:

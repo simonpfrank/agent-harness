@@ -47,6 +47,44 @@ def _run_tool_calls(
         return [(tc, future.result()) for tc, future in zip(tool_calls, futures, strict=True)]
 
 
+def _handle_tool_calls(
+    tool_calls: list[ToolCall],
+    messages: list[Message],
+    cb: LoopCallbacks,
+    config: AgentConfig,
+    call_counts: dict[str, int],
+    error_streaks: dict[str, int],
+) -> tuple[str | None, str]:
+    """Execute a turn's tool calls, append their results, and run thrash detection.
+
+    Args:
+        tool_calls: This turn's tool calls.
+        messages: Conversation history, appended to in place.
+        cb: Loop callbacks.
+        config: Agent configuration.
+        call_counts: Mutable per-run thrash-tracking state, mutated in place.
+        error_streaks: Mutable per-run thrash-tracking state, mutated in place.
+
+    Returns:
+        `(thrash_detail, thrash_tool)` — `thrash_detail` is `None` if
+        nothing looks like thrashing yet.
+    """
+    for tc in tool_calls:
+        logger.debug("Executing tool: %s(%s)", tc.name, list(tc.arguments.keys()))
+    results = _run_tool_calls(tool_calls, cb, config.parallel_tool_calls)
+    for _tc, result in results:
+        if result is not None:
+            messages.append(Message(role="tool", tool_result=result))
+    thrash_detail: str | None = None
+    thrash_tool = ""
+    for tc, result in results:
+        detail = check_tool_thrashing(tc, result, call_counts, error_streaks, config.thrash_threshold)
+        if detail is not None:
+            thrash_detail = detail
+            thrash_tool = tc.name
+    return thrash_detail, thrash_tool
+
+
 def _with_budget_note(messages: list[Message], cb: LoopCallbacks) -> list[Message]:
     """Build a disposable message list with a budget note appended to the
     system message, without mutating the canonical (persisted) list.
@@ -92,6 +130,8 @@ def run(
     error_streaks: dict[str, int] = {}
     turn = 0
     while turn < config.max_turns:
+        if cb.is_cancelled and cb.is_cancelled():
+            break
         trimmed = trim_messages(messages, context_limit)
         if len(trimmed) < len(messages):
             messages.clear()
@@ -101,6 +141,7 @@ def run(
         response = chat_fn(
             call_messages, tool_schemas, model=config.model,
             stream=config.stream, on_delta=cb.on_delta, on_thinking_delta=cb.on_thinking_delta,
+            is_cancelled=cb.is_cancelled,
             **config.provider_kwargs,
         )
         messages.append(response.message)
@@ -116,20 +157,9 @@ def run(
         if response.stop_reason != "tool_use":
             break
 
-        thrash_detail: str | None = None
-        thrash_tool = ""
-        tool_calls = response.message.tool_calls or []
-        for tc in tool_calls:
-            logger.debug("Executing tool: %s(%s)", tc.name, list(tc.arguments.keys()))
-        results = _run_tool_calls(tool_calls, cb, config.parallel_tool_calls)
-        for _tc, result in results:
-            if result is not None:
-                messages.append(Message(role="tool", tool_result=result))
-        for tc, result in results:
-            detail = check_tool_thrashing(tc, result, call_counts, error_streaks, config.thrash_threshold)
-            if detail is not None:
-                thrash_detail = detail
-                thrash_tool = tc.name
+        thrash_detail, thrash_tool = _handle_tool_calls(
+            response.message.tool_calls or [], messages, cb, config, call_counts, error_streaks,
+        )
 
         turn += 1
         if budget_exceeded:

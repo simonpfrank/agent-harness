@@ -1,5 +1,8 @@
 """Tests for agent_harness.cli."""
 
+import os
+import signal
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -503,6 +506,81 @@ class TestRunAgent:
         assert "pondering" in out
         assert "ANSWER" in out
         assert "answer" in out
+
+
+class TestGracefulSigintStop:
+    """Ctrl-C mid-turn should stop that turn gracefully and return control
+    to the REPL — not kill the whole process, and not leave a custom SIGINT
+    handler installed once the turn is over."""
+
+    @patch("agent_harness.cli.prepare_runtime")
+    @patch("agent_harness.cli.config_loader")
+    def test_prepare_runtime_receives_a_callable_is_cancelled_fn(
+        self, mock_config: MagicMock, mock_prepare_runtime: MagicMock,
+    ) -> None:
+        cfg = AgentConfig(
+            name="test", provider="anthropic", model="claude-haiku-4-5-20251001",
+            agent_dir="/tmp/test", instructions="Be helpful", max_turns=5,
+        )
+        runtime = MagicMock()
+        runtime.init_messages.return_value = []
+        mock_config.load.return_value = cfg
+        mock_prepare_runtime.return_value = runtime
+
+        run_agent("./agents/hello", prompt="hi")
+
+        is_cancelled_fn = mock_prepare_runtime.call_args.kwargs["is_cancelled_fn"]
+        assert callable(is_cancelled_fn)
+        assert is_cancelled_fn() is False  # nothing cancelled this turn
+
+    @patch("agent_harness.cli.prompt_user")
+    @patch("agent_harness.cli.prepare_runtime")
+    @patch("agent_harness.cli.config_loader")
+    def test_real_sigint_during_run_messages_is_absorbed_and_repl_continues(
+        self, mock_config: MagicMock, mock_prepare_runtime: MagicMock, mock_prompt_user: MagicMock,
+    ) -> None:
+        cfg = AgentConfig(
+            name="test", provider="anthropic", model="claude-haiku-4-5-20251001",
+            agent_dir="/tmp/test", instructions="Be helpful", max_turns=5,
+        )
+        runtime = MagicMock()
+        runtime.init_messages.return_value = []
+
+        def slow_run_messages(messages: object, prompt: str | None = None) -> str:
+            os.kill(os.getpid(), signal.SIGINT)
+            time.sleep(0.05)  # let the signal actually deliver before returning
+            return "partial"
+
+        runtime.run_messages.side_effect = slow_run_messages
+        mock_config.load.return_value = cfg
+        mock_prepare_runtime.return_value = runtime
+        mock_prompt_user.side_effect = ["hello", "exit"]
+
+        run_agent("./agents/hello")  # REPL mode
+
+        assert runtime.run_messages.call_count == 1
+        assert mock_prompt_user.call_count == 2  # proves the REPL asked again instead of exiting
+
+    @patch("agent_harness.cli.prompt_user")
+    @patch("agent_harness.cli.prepare_runtime")
+    @patch("agent_harness.cli.config_loader")
+    def test_default_sigint_handler_restored_after_each_turn(
+        self, mock_config: MagicMock, mock_prepare_runtime: MagicMock, mock_prompt_user: MagicMock,
+    ) -> None:
+        cfg = AgentConfig(
+            name="test", provider="anthropic", model="claude-haiku-4-5-20251001",
+            agent_dir="/tmp/test", instructions="Be helpful", max_turns=5,
+        )
+        runtime = MagicMock()
+        runtime.init_messages.return_value = []
+        runtime.run_messages.return_value = "hi"
+        mock_config.load.return_value = cfg
+        mock_prepare_runtime.return_value = runtime
+        mock_prompt_user.side_effect = ["hello", "exit"]
+
+        original_handler = signal.getsignal(signal.SIGINT)
+        run_agent("./agents/hello")
+        assert signal.getsignal(signal.SIGINT) is original_handler
 
     @patch("agent_harness.cli.prompt_user")
     @patch("agent_harness.cli.prepare_runtime")

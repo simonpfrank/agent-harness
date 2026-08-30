@@ -272,6 +272,7 @@ def prepare_runtime(
     show_output: bool = True,
     trace_enabled: bool = True,
     output_sink: OutputSink | None = None,
+    is_cancelled_fn: Callable[[], bool] | None = None,
 ) -> PreparedRuntime:
     """Prepare everything needed to execute an agent consistently.
 
@@ -286,6 +287,12 @@ def prepare_runtime(
         output_sink: Optional hooks for a non-console driver (e.g. an API
             server) to receive run events. Fires alongside, not instead of,
             the console display — inert (`None`) leaves CLI behavior unchanged.
+        is_cancelled_fn: Optional `() -> bool`, checked at each turn/stream
+            checkpoint to stop a run gracefully. Inert (`None`) leaves
+            behavior unchanged. The CLI reads a mutable flag it resets
+            before each turn (one `PreparedRuntime` is reused across a
+            REPL's turns); the API sources it directly from its per-run
+            registry state.
 
     Returns:
         Prepared runtime object that can initialize messages, run the loop, and persist
@@ -345,6 +352,7 @@ def prepare_runtime(
         plan_prompt_fn=plan_prompt_fn,
         tmp_dir=str(tmp_dir),
         output_sink=output_sink,
+        is_cancelled=is_cancelled_fn,
     )
     chat_fn = provider_registry[config.provider]
     loop_fn = loop_registry[config.loop]

@@ -1,0 +1,35 @@
+name: agent
+provider: openai
+model: qwen3.5-4b-mlx
+loop: react
+tools:
+  [
+    run_command,
+    read_file,
+    write_file,
+    edit_file,
+    view_image,
+    view_document,
+    web_fetch,
+    web_search,
+    list_provider_models,
+    list_directory,
+    get_current_date,
+    get_current_time,
+    execute_code,
+    save_memory,
+    recall_memory,
+    list_memories,
+    run_agent,
+    content_search,
+    file_search,
+    profile_data,
+    value_overlap,
+    word_count,
+  ]
+max_turns: 25
+max_cost: 1.00
+stream: true
+show_thinking: true
+provider_kwargs:
+  base_url: "http://localhost:1234/v1"

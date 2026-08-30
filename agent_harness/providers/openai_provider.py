@@ -500,7 +500,9 @@ def _merge_tool_call_delta(fragments: dict[int, dict[str, Any]], tc_delta: Any) 
             fragment["arguments"] += tc_delta.function.arguments
 
 
-def _stream_chat_completions_deltas(stream: Any, on_delta: Any, on_thinking_delta: Any = None) -> Response:
+def _stream_chat_completions_deltas(
+    stream: Any, on_delta: Any, on_thinking_delta: Any = None, is_cancelled: Any = None,
+) -> Response:
     """Consume a Chat Completions chunk stream, dispatching text deltas.
 
     Unlike `client.responses.stream()`, `client.chat.completions.create(
@@ -516,6 +518,12 @@ def _stream_chat_completions_deltas(stream: Any, on_delta: Any, on_thinking_delt
             separate field from `delta.content` (confirmed directly
             against a real LM Studio response, not assumed). Real hosted
             OpenAI Chat Completions responses simply never set this field.
+        is_cancelled: Optional `() -> bool`, checked once per chunk. On
+            `True`, stops consuming immediately and returns whatever was
+            accumulated so far with `stop_reason="cancelled"` — this
+            function already builds its `Response` entirely from local
+            accumulation (not an SDK "final message"), so an early stop
+            costs nothing extra to support.
 
     Returns:
         Parsed Response accumulated from the stream's chunks.
@@ -524,8 +532,12 @@ def _stream_chat_completions_deltas(stream: Any, on_delta: Any, on_thinking_delt
     reasoning_parts: list[str] = []
     tool_call_fragments: dict[int, dict[str, Any]] = {}
     final_chunk: Any = None
+    cancelled = False
 
     for chunk in stream:
+        if is_cancelled is not None and is_cancelled():
+            cancelled = True
+            break
         if chunk.usage is not None:
             final_chunk = chunk
         if not chunk.choices:
@@ -557,7 +569,7 @@ def _stream_chat_completions_deltas(stream: Any, on_delta: Any, on_thinking_delt
         tool_calls=tool_calls or None,
         thinking="".join(reasoning_parts) or None,
     )
-    stop_reason = "tool_use" if tool_calls else "end_turn"
+    stop_reason = "cancelled" if cancelled else ("tool_use" if tool_calls else "end_turn")
     return Response(message=message, usage=_usage_to_internal(final_chunk), stop_reason=stop_reason)
 
 
@@ -607,12 +619,13 @@ def chat(
     client = _get_client(base_url=base_url, api_key=kwargs.get("api_key"))
     on_delta = kwargs.get("on_delta")
     on_thinking_delta = kwargs.get("on_thinking_delta")
+    is_cancelled = kwargs.get("is_cancelled")
 
     def _call() -> Response:
         if endpoint == "chat_completions":
             if stream:
                 return _stream_chat_completions_deltas(
-                    client.chat.completions.create(**create_kwargs), on_delta, on_thinking_delta,
+                    client.chat.completions.create(**create_kwargs), on_delta, on_thinking_delta, is_cancelled,
                 )
             return _to_response(client.chat.completions.create(**create_kwargs))
         if stream:

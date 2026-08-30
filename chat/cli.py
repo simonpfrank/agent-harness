@@ -7,9 +7,10 @@ timing and event ordering are directly visible. For working on the API
 itself; the Streamlit app in chat/app.py can come back to this once the
 API side is solid.
 
-Note: Ctrl-C stops *this script's* view of the stream — the server has no
-cancellation support yet, so a run already in progress keeps running
-server-side regardless (see docs/api-plan.md's "deferred" list).
+Note: Ctrl-C sends a real cancel signal to the server (POST
+/runs/<run_id>/signal, {"type": "cancel"}) before tearing down the local
+connection, then returns to the `>` prompt rather than exiting — the run
+actually stops server-side, not just the local view of it.
 
 Usage:
     python chat/cli.py <agent_name> [--url http://127.0.0.1:8420] [--session NAME] \
@@ -19,6 +20,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 from datetime import datetime
 from typing import Any
@@ -66,12 +68,28 @@ def _print_event(event_type: str, data: dict[str, Any], last_type: str | None) -
         final_text = data.get("final_text")
         if final_text:
             print(f"           final_text: {final_text}")
+    elif event_type == "cancelled":
+        print(f"[{_ts()}] CANCELLED: run stopped before completion")
+        print(f"           budget:  {data.get('budget_summary')}")
+        final_text = data.get("final_text")
+        if final_text:
+            print(f"           partial final_text: {final_text}")
     elif event_type == "error":
         print(f"[{_ts()}] ERROR: {data['message']}")
     return event_type
 
 
 _BRIEF_THINKING_PREFIX = "(Keep your thinking brief, just 2-3 sentences, then answer.) "
+
+
+def _send_cancel(base_url: str, run_id: str, headers: dict[str, str]) -> None:
+    """Tell the server to actually stop the run, not just disconnect.
+
+    Best-effort: swallows its own connection errors — the local stream is
+    already being torn down regardless of whether this succeeds.
+    """
+    with contextlib.suppress(httpx.HTTPError):
+        httpx.post(f"{base_url}/runs/{run_id}/signal", json={"type": "cancel"}, headers=headers, timeout=5.0)
 
 
 def _run_once(base_url: str, agent: str, session_name: str, headers: dict[str, str], message: str) -> None:
@@ -90,12 +108,17 @@ def _run_once(base_url: str, agent: str, session_name: str, headers: dict[str, s
             print(resp.read().decode(errors="replace"))
             return
         current_type: str | None = None
-        for line in resp.iter_lines():
-            if line.startswith("event: "):
-                current_type = line[len("event: "):]
-            elif line.startswith("data: ") and current_type is not None:
-                data = json.loads(line[len("data: "):])
-                last_type = _print_event(current_type, data, last_type)
+        try:
+            for line in resp.iter_lines():
+                if line.startswith("event: "):
+                    current_type = line[len("event: "):]
+                elif line.startswith("data: ") and current_type is not None:
+                    data = json.loads(line[len("data: "):])
+                    last_type = _print_event(current_type, data, last_type)
+        except KeyboardInterrupt:
+            print(f"\n[{_ts()}] ^C — stopping run {run_id}...")
+            _send_cancel(base_url, run_id, headers)
+            return
     if last_type in ("delta", "thinking_delta"):
         print()
 

@@ -26,9 +26,9 @@ python chat/cli.py hello --url http://127.0.0.1:8420 --key <secret>   # if AGENT
 ```
 
 Type a message, press Enter, watch the timestamped event stream, repeat.
-Ctrl-C stops *this script's* view of the stream — the server has no
-cancellation support yet, so a run already in progress keeps running
-server-side regardless.
+Ctrl-C sends a real cancel signal to the server before disconnecting, then
+returns to the `>` prompt — the run actually stops server-side, not just
+this script's view of it.
 
 ### `--thinking normal|brief`
 
@@ -55,16 +55,20 @@ streamlit run chat/app.py
 ```
 
 Set the server URL and (if `AGENT_HARNESS_API_KEY` is configured) the API
-key in the sidebar, pick an agent, and chat.
+key in the sidebar, pick an agent, and chat. A **⏹ Stop** button appears
+next to an in-progress turn — the streaming itself runs on a background
+thread, polled by a `st.fragment` ticking every 0.2s, specifically so the
+button stays clickable while a response is still streaming (a plain
+`st.write_stream` call blocks the whole script, which would make a Stop
+button unclickable until the stream finished on its own).
 
 ## Known limitations, by design (not bugs)
 
-- **No live approval handling.** If the selected agent's config has
-  `always_ask` tools, the run pauses and the UI shows the exact `curl`
-  command to answer it manually — resuming the same connection from a
-  Streamlit rerun isn't possible without a background thread, and the API
-  has no "reconnect to an in-progress run" endpoint yet. Use `agents/hello`
-  (no `permissions:` configured) for a friction-free first try.
+- **No live approval handling**, even though the background-thread pattern
+  the Stop button uses *could* now support it. If the selected agent's
+  config has `always_ask` tools, the run pauses and the UI shows the exact
+  `curl` command to answer it manually instead. Use `agents/hello` (no
+  `permissions:` configured) for a friction-free first try.
 - **No conversation history on session switch.** The API has no
   "fetch a session's messages" endpoint yet — picking an existing session
   name resumes it server-side (the agent remembers), but this UI's own

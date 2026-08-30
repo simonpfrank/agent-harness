@@ -169,6 +169,49 @@ entirely, so nothing distinguished "stopped because verified" from
 "stopped because budget ran out, unverified" in what the user actually
 saw.
 
+### Cancellation ("stop")
+
+Both the plain CLI and the API support stopping a run mid-turn rather than
+only between turns. Two real checkpoints, deliberately not more: a
+turn-boundary check (`LoopCallbacks.is_cancelled`, same shape/placement as
+the existing `is_budget_exceeded`, checked once per turn in `react.py`
+before the next model call) and a mid-stream check inside both providers'
+streaming delta loops (`anthropic.py`, `openai_provider.py`'s Chat
+Completions path) — cancelling there returns a `Response` built from
+whatever text/thinking was accumulated locally so far, with
+`stop_reason="cancelled"`. **Mid-tool-call cancellation is explicitly not
+built** — `run_command`/`execute_code` use blocking `subprocess.run` with no
+live handle to kill early, so a stop requested while a tool call is in
+flight takes effect only once that call finishes, at the next turn-boundary
+checkpoint.
+
+**CLI** (`agent-harness run`): Ctrl-C during a turn is now graceful, not a
+hard process kill — a SIGINT handler installed only for the duration of
+`run_messages()` sets a flag instead of raising `KeyboardInterrupt`,
+restored immediately after so Ctrl-C at the next input prompt still exits
+the REPL as before.
+
+**API**: the already-generic `POST /runs/<run_id>/signal` endpoint accepts
+`{"type": "cancel"}` (no-op on an unknown/already-finished run — not an
+error). A run that finishes after being cancelled reports a `cancelled` SSE
+event instead of `done`, so the client knows it stopped because it asked,
+not because the agent naturally finished. `chat/cli.py`'s Ctrl-C sends this
+signal before disconnecting, so the run actually stops server-side rather
+than just releasing the session lock (the earlier disconnect-triggered
+lock-release fix) while continuing to run unseen.
+
+**Real bug found and fixed during this build, not scoped originally:** any
+event a still-running worker tries to push after its reader has
+disconnected (not just the terminal one — deltas, thinking deltas, thrash
+warnings, approval prompts too) previously raised `UnknownRunError`
+uncaught, crashing the worker thread and logging a misleading "crashed
+unexpectedly." `RunRegistry.try_push_event` tolerates this now; every push
+site in the API's `OutputSink`/`_execute_run` uses it. `push_event` itself
+keeps raising for callers that genuinely want to know about a bad run_id.
+**Streamlit's own Stop button UX is a separate, deferred follow-up** —
+`chat/app.py` blocks the whole script on `st.write_stream` while streaming,
+so a button can't be clicked mid-stream with today's structure.
+
 ## Tools
 
 **Built-in** (`tools.py`, always available):
@@ -449,14 +492,14 @@ Full PRD + as-built spec in `docs/multimodal-plan.md`. Two capabilities:
 
 - **`GET /agents`** — lists available agent names (`config.py::list_agent_names`, scans `<agents_dir>/*/config.yaml`).
 - **`POST /agents/<name>/runs`** — starts one turn. Body: `{"message": str, "session_id"?: str, "session_name"?: str}`. Response is `text/event-stream` (Server-Sent Events), held open for the run's duration, plus an `X-Run-Id` header — the only place a client learns the run's id, needed to answer any approval it raises. Returns `404` for an unknown agent, `400` for a missing message, `409` if the target session already has a run in flight.
-- **`POST /runs/<run_id>/signal`** — answers a pending approval. Body: `{"approval_id": str, "decision": str}`. `202` on success, `404` if the run or approval id doesn't match anything currently pending.
-- **SSE event types**: `delta`/`thinking_delta` (answer/thinking text chunks), `tool_call`/`tool_result` (full parity with what a CLI user already sees — not just streaming text), `budget`, `thrash_warning`, `approval_needed` (blocks the run; carries `approval_id` + a `kind` of `tool`/`domain`/`plan` and the relevant fields), `heartbeat` (idle keep-alive, 15s default — lets a client tell "still working" apart from "connection died"; the *first* one is sent immediately when the connection opens, before any wait — otherwise the WSGI layer has nothing to flush until the model produces its first real token, so a client sees no response at all, not even HTTP headers, for however long that takes; confirmed live, 2026-08-23, up to 15s of total silence on a connection that was already fully alive), `done` (final: `verified`/`detail`/`budget_summary`/`final_text`/`session_id`/`session_name`), `error`.
+- **`POST /runs/<run_id>/signal`** — answers a pending approval (body: `{"approval_id": str, "decision": str}`) or requests cancellation (body: `{"type": "cancel"}` — see "Cancellation" above; `202` even for an unknown/already-finished run_id, not an error). `202` on success, `404` if an approval body's run or approval id doesn't match anything currently pending.
+- **SSE event types**: `delta`/`thinking_delta` (answer/thinking text chunks), `tool_call`/`tool_result` (full parity with what a CLI user already sees — not just streaming text), `budget`, `thrash_warning`, `approval_needed` (blocks the run; carries `approval_id` + a `kind` of `tool`/`domain`/`plan` and the relevant fields), `heartbeat` (idle keep-alive, 15s default — lets a client tell "still working" apart from "connection died"; the *first* one is sent immediately when the connection opens, before any wait — otherwise the WSGI layer has nothing to flush until the model produces its first real token, so a client sees no response at all, not even HTTP headers, for however long that takes; confirmed live, 2026-08-23, up to 15s of total silence on a connection that was already fully alive), `done` (final: `verified`/`detail`/`budget_summary`/`final_text`/`session_id`/`session_name`), `cancelled` (same payload shape as `done` — a run that finished after being asked to stop, so the client knows why it ended), `error`.
   **`thinking_delta` is sent unconditionally, regardless of the agent's `show_thinking` config value** — that setting only gates whether the *standard CLI's own console* prints thinking (`cli.py`'s `show_output`/`show_thinking` check); it has no effect on what the API emits. Deliberate: the harness's job is to expose what's happening, not decide what a given client should render. A client that doesn't want to show thinking (e.g. a voice UI) filters `thinking_delta` on its own side rather than relying on the agent's config to suppress it — confirmed directly (2026-08-22): a misspelled `show_thinking` key in an agent's config silently defaulted to `False` with no warning, and the API kept sending thinking deltas the whole time regardless, exactly as designed.
 - **Concurrency model**: thread-per-request, not asyncio — each held-open SSE connection is one thread blocked on I/O. Deliberate, revisit only if a real high-fan-out driver emerges (matches the same bar set for parallel tool-call execution/sub-agent fan-out, below).
 - **Session identity is GUID-first** (`session.py`, mirrors Claude Code's session model) — every session gets a GUID regardless of whether it's named; a name is optional/cosmetic, resolved via a directory scan, never the file's actual key. One active run per session, enforced (a second concurrent request against a session already in flight gets `409`) — `save_session` overwrites the whole file rather than appending, so without this a genuinely concurrent second writer could silently drop the first one's entire turn.
 - **Approval waits time out** (5 minutes, default-deny past that) rather than holding a session's lock forever if a client vanishes mid-approval.
 - **Auth: a single shared-secret header** (`X-API-Key`, checked via `secrets.compare_digest`), read from `AGENT_HARNESS_API_KEY`; server binds to `127.0.0.1` by default. **Trust boundary, stated plainly, not left implicit:** anyone holding a valid key can list, resume, and run *every* agent and *every* session — session access has no separate protection layer beyond the same secret that already grants everything else. Full auth (accounts, tokens, rotation) is deliberately not built — right-sized for the current LAN-only/single-machine deployment, not an oversight.
-- **Deliberately not built yet** (see `docs/api-plan.md` for the reasoning behind each): real cancellation (the signal endpoint's shape doesn't preclude adding it, but the harness has no loop-level interrupt points today), true suspend/resume of a dropped connection, agent create/delete/edit via the API (list/run only), websockets.
+- **Deliberately not built yet** (see `docs/api-plan.md` for the reasoning behind each): true suspend/resume of a dropped connection, agent create/delete/edit via the API (list/run only), websockets. (Real cancellation shipped 2026-08-23 — see "Cancellation" above.)
 - **Why Flask, not FastAPI**: FastAPI's real advantage is Pydantic-based request models plus free interactive docs — adopting it here would mean pulling in Pydantic for a project that avoids it unless necessary, in exchange for async-native performance this design deliberately doesn't use (thread-per-request, not asyncio, is the whole point). Flask's `stream_with_context` is the standard, singular way to stream a response; FastAPI's SSE story leans on a third-party package instead.
 
 ## Evaluation framework (`eval/`)

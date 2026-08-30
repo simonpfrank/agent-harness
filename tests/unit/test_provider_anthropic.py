@@ -461,3 +461,69 @@ class TestChatStreaming:
 
         result = chat([Message(role="user", content="hi")], tools=[], stream=True)
         assert result.message.content == "hi"
+
+    @patch("agent_harness.providers.anthropic._get_client")
+    def test_cancellation_stops_early_and_returns_locally_accumulated_partial_content(
+        self, mock_get_client: MagicMock,
+    ) -> None:
+        """Confirmed live (2026-08-23): `get_final_message()` on an
+        early-broken stream keeps consuming the rest of the stream
+        internally (~same total wait as never cancelling at all). The
+        cancelled path must build its Response from locally-accumulated
+        deltas instead, and must never call get_final_message()."""
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+
+        events = []
+        for text in ["one", "two", "three", "four"]:
+            event = MagicMock(type="content_block_delta")
+            event.delta = MagicMock(type="text_delta", text=text)
+            events.append(event)
+
+        mock_stream = MagicMock()
+        mock_stream.__enter__.return_value = mock_stream
+        mock_stream.__exit__.return_value = False
+        mock_stream.__iter__.return_value = iter(events)
+        mock_client.messages.stream.return_value = mock_stream
+
+        call_count = {"n": 0}
+
+        def is_cancelled() -> bool:
+            call_count["n"] += 1
+            return call_count["n"] > 2
+
+        result = chat(
+            [Message(role="user", content="hi")],
+            tools=[],
+            stream=True,
+            is_cancelled=is_cancelled,
+        )
+
+        assert result.message.content == "onetwo"
+        assert result.stop_reason == "cancelled"
+        mock_stream.get_final_message.assert_not_called()
+
+    @patch("agent_harness.providers.anthropic._get_client")
+    def test_no_is_cancelled_callback_uses_get_final_message_as_before(self, mock_get_client: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+
+        text_delta_event = MagicMock(type="content_block_delta")
+        text_delta_event.delta = MagicMock(type="text_delta", text="hi")
+
+        final_message = MagicMock()
+        final_message.content = [MagicMock(type="text", text="hi")]
+        final_message.usage.input_tokens = 1
+        final_message.usage.output_tokens = 1
+        final_message.stop_reason = "end_turn"
+
+        mock_stream = MagicMock()
+        mock_stream.__enter__.return_value = mock_stream
+        mock_stream.__exit__.return_value = False
+        mock_stream.__iter__.return_value = iter([text_delta_event])
+        mock_stream.get_final_message.return_value = final_message
+        mock_client.messages.stream.return_value = mock_stream
+
+        result = chat([Message(role="user", content="hi")], tools=[], stream=True)
+        assert result.message.content == "hi"
+        mock_stream.get_final_message.assert_called_once()

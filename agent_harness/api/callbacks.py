@@ -57,7 +57,7 @@ def _await_approval(
     timeout: float,
 ) -> dict[str, Any] | None:
     approval_id = uuid.uuid4().hex
-    registry.push_event(
+    registry.try_push_event(
         run_id,
         SseEvent(
             event=events.APPROVAL_NEEDED,
@@ -155,14 +155,16 @@ def build_output_sink(
         An `OutputSink` ready to pass into `prepare_runtime`.
     """
     def on_delta(agent_id: str, text: str) -> None:
-        registry.push_event(run_id, SseEvent(events.DELTA, {"agent": agent_id, "text": text}, seq.next()))
+        registry.try_push_event(run_id, SseEvent(events.DELTA, {"agent": agent_id, "text": text}, seq.next()))
 
     def on_thinking_delta(agent_id: str, text: str) -> None:
-        registry.push_event(run_id, SseEvent(events.THINKING_DELTA, {"agent": agent_id, "text": text}, seq.next()))
+        registry.try_push_event(
+            run_id, SseEvent(events.THINKING_DELTA, {"agent": agent_id, "text": text}, seq.next()),
+        )
 
     def on_tool_call(tool_call: ToolCall) -> None:
         data = {"id": tool_call.id, "name": tool_call.name, "arguments": tool_call.arguments}
-        registry.push_event(run_id, SseEvent(events.TOOL_CALL, data, seq.next()))
+        registry.try_push_event(run_id, SseEvent(events.TOOL_CALL, data, seq.next()))
 
     def on_tool_result(result: ToolResult) -> None:
         data = {
@@ -171,10 +173,10 @@ def build_output_sink(
             "error": result.error,
             "has_attachment": result.attachment is not None,
         }
-        registry.push_event(run_id, SseEvent(events.TOOL_RESULT, data, seq.next()))
+        registry.try_push_event(run_id, SseEvent(events.TOOL_RESULT, data, seq.next()))
 
     def on_budget(summary: str) -> None:
-        registry.push_event(run_id, SseEvent(events.BUDGET, {"summary": summary}, seq.next()))
+        registry.try_push_event(run_id, SseEvent(events.BUDGET, {"summary": summary}, seq.next()))
 
     def on_completion_status(verified: bool, detail: str) -> None:
         completion_status.verified = verified
@@ -182,7 +184,7 @@ def build_output_sink(
 
     def on_thrash_detected(tool_name: str, detail: str) -> None:
         data = {"tool": tool_name, "detail": detail}
-        registry.push_event(run_id, SseEvent(events.THRASH_WARNING, data, seq.next()))
+        registry.try_push_event(run_id, SseEvent(events.THRASH_WARNING, data, seq.next()))
 
     return OutputSink(
         on_delta=on_delta,

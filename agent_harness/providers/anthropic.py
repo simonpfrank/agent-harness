@@ -205,24 +205,48 @@ def _apply_thinking(create_kwargs: dict[str, Any], thinking: dict[str, Any], kwa
     create_kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget_tokens}
 
 
-def _stream_deltas(stream: Any, on_delta: Any, on_thinking_delta: Any) -> Response:
+def _stream_deltas(stream: Any, on_delta: Any, on_thinking_delta: Any, is_cancelled: Any = None) -> Response:
     """Consume a MessageStream, dispatching deltas, and return the final Response.
 
     Args:
         stream: Open `MessageStream` context manager value.
         on_delta: Optional callback for text deltas, `(agent_id, chunk)`.
         on_thinking_delta: Optional callback for thinking deltas, `(agent_id, chunk)`.
+        is_cancelled: Optional `() -> bool`, checked once per event. On
+            `True`, stops consuming immediately and returns whatever was
+            accumulated locally so far with `stop_reason="cancelled"` —
+            confirmed live that `get_final_message()` on an early-broken
+            stream keeps consuming the rest of the stream internally
+            (same total wait as never cancelling), so the cancelled path
+            must never call it. The normal (non-cancelled) path is
+            unchanged — still `get_final_message()`, which correctly
+            reconstructs tool_calls/thinking signatures that per-event
+            local accumulation can't.
 
     Returns:
-        Parsed Response built from the stream's final accumulated message.
+        Parsed Response built from the stream's final accumulated message,
+        or from local accumulation if cancelled mid-stream.
     """
+    text_parts: list[str] = []
+    thinking_parts: list[str] = []
     for event in stream:
+        if is_cancelled is not None and is_cancelled():
+            message = Message(
+                role="assistant",
+                content="".join(text_parts) or None,
+                thinking="".join(thinking_parts) or None,
+            )
+            return Response(message=message, usage=Usage(input_tokens=0, output_tokens=0), stop_reason="cancelled")
         if event.type != "content_block_delta":
             continue
-        if event.delta.type == "text_delta" and on_delta is not None:
-            on_delta("default", event.delta.text)
-        elif event.delta.type == "thinking_delta" and on_thinking_delta is not None:
-            on_thinking_delta("default", event.delta.thinking)
+        if event.delta.type == "text_delta":
+            text_parts.append(event.delta.text)
+            if on_delta is not None:
+                on_delta("default", event.delta.text)
+        elif event.delta.type == "thinking_delta":
+            thinking_parts.append(event.delta.thinking)
+            if on_thinking_delta is not None:
+                on_thinking_delta("default", event.delta.thinking)
     return _to_response(stream.get_final_message())
 
 
@@ -272,11 +296,12 @@ def chat(
     stream = kwargs.get("stream", False)
     on_delta = kwargs.get("on_delta")
     on_thinking_delta = kwargs.get("on_thinking_delta")
+    is_cancelled = kwargs.get("is_cancelled")
 
     def _call() -> Response:
         if stream:
             with _get_client().messages.stream(**create_kwargs) as message_stream:
-                return _stream_deltas(message_stream, on_delta, on_thinking_delta)
+                return _stream_deltas(message_stream, on_delta, on_thinking_delta, is_cancelled)
         return _to_response(_get_client().messages.create(**create_kwargs))
 
     result: Response = with_retry(

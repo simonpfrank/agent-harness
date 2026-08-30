@@ -790,3 +790,52 @@ class TestChatCompletionsStreaming:
         assert result.message.content == "hi"
         assert result.usage.input_tokens == 0
         assert result.usage.output_tokens == 0
+
+    @patch("agent_harness.providers.openai_provider._get_client")
+    def test_cancellation_stops_early_and_returns_partial_content(self, mock_get_client: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        # Cancel fires after the 2nd chunk — the 3rd/4th must never be seen.
+        chunks_seen: list[str] = []
+
+        def chunk_stream() -> Any:
+            for text in ["one", "two", "three", "four"]:
+                chunks_seen.append(text)
+                yield _cc_chunk(content=text)
+
+        mock_client.chat.completions.create.return_value = chunk_stream()
+
+        call_count = {"n": 0}
+
+        def is_cancelled() -> bool:
+            call_count["n"] += 1
+            return call_count["n"] > 2
+
+        result = chat(
+            [Message(role="user", content="hi")],
+            tools=[],
+            model="qwen3-4b-thinking-2507",
+            base_url="http://localhost:1234/v1",
+            stream=True,
+            is_cancelled=is_cancelled,
+        )
+
+        assert result.message.content == "onetwo"
+        assert result.stop_reason == "cancelled"
+        assert chunks_seen == ["one", "two", "three"]  # generator advanced once more, chunk never processed
+
+    @patch("agent_harness.providers.openai_provider._get_client")
+    def test_no_is_cancelled_callback_does_not_raise(self, mock_get_client: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        mock_client.chat.completions.create.return_value = iter([_cc_chunk(content="hi")])
+
+        result = chat(
+            [Message(role="user", content="hi")],
+            tools=[],
+            model="qwen3-4b-thinking-2507",
+            base_url="http://localhost:1234/v1",
+            stream=True,
+        )
+        assert result.message.content == "hi"
+        assert result.stop_reason == "end_turn"

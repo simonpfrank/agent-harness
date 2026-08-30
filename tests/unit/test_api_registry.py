@@ -43,6 +43,59 @@ class TestStartRunEndRun:
         registry.end_run("never-started")  # must not raise
 
 
+class TestCancellation:
+    def test_defaults_to_not_cancelled(self) -> None:
+        registry = RunRegistry()
+        registry.start_run("run-1", "session-1")
+        assert registry.is_cancelled("run-1") is False
+
+    def test_request_cancel_sets_the_flag(self) -> None:
+        registry = RunRegistry()
+        registry.start_run("run-1", "session-1")
+        registry.request_cancel("run-1")
+        assert registry.is_cancelled("run-1") is True
+
+    def test_request_cancel_on_unknown_run_is_a_no_op(self) -> None:
+        registry = RunRegistry()
+        registry.request_cancel("never-started")  # must not raise
+
+    def test_is_cancelled_on_unknown_run_defaults_to_false(self) -> None:
+        registry = RunRegistry()
+        assert registry.is_cancelled("never-started") is False
+
+    def test_cancel_on_one_run_does_not_affect_another(self) -> None:
+        registry = RunRegistry()
+        registry.start_run("run-1", "session-1")
+        registry.start_run("run-2", "session-2")
+        registry.request_cancel("run-1")
+        assert registry.is_cancelled("run-1") is True
+        assert registry.is_cancelled("run-2") is False
+
+
+class TestConcurrentCancellation:
+    def test_cancel_from_another_thread_is_seen_promptly(self) -> None:
+        registry = RunRegistry()
+        registry.start_run("run-1", "session-1")
+        seen: list[bool] = []
+
+        def poller() -> None:
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                if registry.is_cancelled("run-1"):
+                    seen.append(True)
+                    return
+                time.sleep(0.01)
+            seen.append(False)
+
+        thread = threading.Thread(target=poller)
+        thread.start()
+        time.sleep(0.05)
+        registry.request_cancel("run-1")
+        thread.join(timeout=2.0)
+
+        assert seen == [True]
+
+
 class TestEventQueue:
     def test_push_then_pop_round_trip(self) -> None:
         registry = RunRegistry()
@@ -67,6 +120,26 @@ class TestEventQueue:
         registry = RunRegistry()
         with pytest.raises(UnknownRunError):
             registry.pop_event("never-started", timeout=0.05)
+
+
+class TestTryPushEvent:
+    """A reader can disconnect (Ctrl-C, cancellation making an abandoned
+    run finish fast, a plain dropped connection) at any point while its
+    worker thread is still mid-execution — every subsequent push from that
+    worker must tolerate the run having already been unregistered, not
+    crash the whole worker thread."""
+
+    def test_returns_true_and_enqueues_for_a_known_run(self) -> None:
+        registry = RunRegistry()
+        registry.start_run("run-1", "session-1")
+        event = SseEvent(event="delta", data={"text": "hi"}, seq=1)
+        assert registry.try_push_event("run-1", event) is True
+        assert registry.pop_event("run-1", timeout=1.0) is event
+
+    def test_returns_false_for_an_unknown_run_without_raising(self) -> None:
+        registry = RunRegistry()
+        result = registry.try_push_event("never-started", SseEvent(event="delta", data={}, seq=1))
+        assert result is False
 
 
 class TestApprovalSignal:

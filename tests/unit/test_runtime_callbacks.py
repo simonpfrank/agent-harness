@@ -173,6 +173,21 @@ class TestIsBudgetExceeded:
         budget.is_exceeded.assert_called_once()
 
 
+class TestIsCancelled:
+    def test_defaults_to_none(self) -> None:
+        cb = _callbacks(stream=False, show_thinking=False)
+        assert cb.is_cancelled is None
+
+    def test_passed_through_unchanged(self) -> None:
+        is_cancelled_fn = MagicMock(return_value=True)
+        cb = make_callbacks(
+            budget=MagicMock(), hooks=MagicMock(), permissions=MagicMock(), tracer=MagicMock(),
+            tool_registry={}, max_output_chars=10_000, show_output=True,
+            is_cancelled=is_cancelled_fn,
+        )
+        assert cb.is_cancelled is is_cancelled_fn
+
+
 class TestOnCompletionStatus:
     @patch("agent_harness.runtime_callbacks.show_completion_status")
     def test_calls_show_completion_status_when_show_output(self, mock_show: MagicMock) -> None:

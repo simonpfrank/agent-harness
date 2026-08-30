@@ -9,7 +9,9 @@ Then:                   streamlit run chat/app.py
 
 from __future__ import annotations
 
+import contextlib
 import json
+import threading
 import uuid
 from typing import Any
 
@@ -18,54 +20,54 @@ import streamlit as st
 
 
 def _handle_event(
-    event_type: str, data: dict[str, Any], status: Any, show_thinking: bool, run_id: str, result: dict[str, Any],
-) -> str | None:
-    """Update `status`/`result` for one SSE event.
+    event_type: str, data: dict[str, Any], show_thinking: bool, active: dict[str, Any],
+) -> tuple[str | None, str | None]:
+    """Update `active` for one SSE event. Caller must hold `active["lock"]`.
 
-    Returns "delta" if the caller should yield `data["text"]` into the
-    streamed answer, "stop" if the caller should stop reading, else None.
+    Returns `(action, status_line)`: `action` is `"stop"` if the caller
+    should stop reading, else `None`. `status_line` is new transient status
+    text to show, or `None` to leave the current one unchanged.
     """
     if event_type == "delta":
-        return "delta"
+        active["text"] = active.get("text", "") + data["text"]
+        return None, None
     if event_type == "thinking_delta" and show_thinking:
         # Each event is one small fragment (a word or two) — accumulate
         # them, don't just display the latest one, or it looks like the
-        # thinking text is replacing itself instead of growing. Show the
-        # whole thing rather than a fixed-length tail: a sliding window
-        # made old text vanish off the top on every new fragment, which
-        # read as the box randomly rewriting itself rather than growing.
-        result["thinking_text"] = result.get("thinking_text", "") + data["text"]
-        status.caption(f"🤔 {result['thinking_text']}")
-    elif event_type == "tool_call":
-        result.setdefault("tool_calls", {})[data["id"]] = {
+        # thinking text is replacing itself instead of growing.
+        active["thinking_text"] = active.get("thinking_text", "") + data["text"]
+        return None, f"🤔 {active['thinking_text']}"
+    if event_type == "tool_call":
+        active.setdefault("tool_calls", {})[data["id"]] = {
             "name": data["name"], "arguments": data["arguments"], "output": None, "error": None,
         }
         args_preview = ", ".join(f"{k}={v!r}" for k, v in data["arguments"].items())
-        status.caption(f"🔧 `{data['name']}({args_preview})`…")
-    elif event_type == "tool_result":
-        record = result["tool_calls"][data["tool_call_id"]]
+        return None, f"🔧 `{data['name']}({args_preview})`…"
+    if event_type == "tool_result":
+        record = active["tool_calls"][data["tool_call_id"]]
         record["output"] = data.get("output")
         record["error"] = data.get("error")
         if record["error"]:
-            status.caption(f"❌ {record['error']}")
-        else:
-            output = (record["output"] or "").strip()
-            preview = output[:500] + ("…" if len(output) > 500 else "")
-            status.caption(f"✅ {preview}" if preview else "✅ done")
-    elif event_type == "budget":
-        status.caption(data["summary"])
-    elif event_type == "thrash_warning":
-        st.warning(f"Thrashing on {data['tool']}: {data['detail']}")
-    elif event_type == "approval_needed":
-        result["approval"] = {"run_id": run_id, **data}
-        return "stop"
-    elif event_type == "error":
-        result["error"] = data["message"]
-        return "stop"
-    elif event_type == "done":
-        result["final_text"] = data.get("final_text") or ""
-        return "stop"
-    return None
+            return None, f"❌ {record['error']}"
+        output = (record["output"] or "").strip()
+        preview = output[:500] + ("…" if len(output) > 500 else "")
+        return None, f"✅ {preview}" if preview else "✅ done"
+    if event_type == "budget":
+        return None, data["summary"]
+    if event_type == "thrash_warning":
+        active["thrash_warning"] = f"Thrashing on {data['tool']}: {data['detail']}"
+        return None, None
+    if event_type == "approval_needed":
+        active["approval"] = {"run_id": active.get("run_id"), **data}
+        return "stop", None
+    if event_type == "error":
+        active["error"] = data["message"]
+        return "stop", None
+    if event_type in ("done", "cancelled"):
+        active["final_text"] = data.get("final_text") or ""
+        active["was_cancelled"] = event_type == "cancelled"
+        return "stop", None
+    return None, None
 
 
 def _render_details(container: Any, msg: dict[str, Any]) -> None:
@@ -83,6 +85,129 @@ def _render_details(container: Any, msg: dict[str, Any]) -> None:
                 st.error(tc["error"])
             elif tc.get("output"):
                 st.text(tc["output"])
+
+
+def _new_active_run(base_url: str, headers: dict[str, str]) -> dict[str, Any]:
+    """Shared state a background thread writes into and the live-run
+    fragment reads from.
+
+    Never touch `st.session_state` itself from the background thread —
+    only mutate this plain dict (safe cross-thread, unlike assigning into
+    `st.session_state`, which must happen on the main script thread).
+    """
+    return {
+        "lock": threading.Lock(),
+        "base_url": base_url,
+        "headers": headers,
+        "run_id": None,
+        "text": "",
+        "thinking_text": "",
+        "status_line": "",
+        "tool_calls": {},
+        "done": False,
+        "error": None,
+        "approval": None,
+        "final_text": None,
+        "was_cancelled": False,
+    }
+
+
+def _stream_worker(
+    base_url: str, agent: str, session_name: str, headers: dict[str, str], message: str,
+    show_thinking: bool, active: dict[str, Any],
+) -> None:
+    """Runs on a background thread — must never call any `st.*` function."""
+    try:
+        with httpx.stream(
+            "POST",
+            f"{base_url}/agents/{agent}/runs",
+            json={"message": message, "session_name": session_name},
+            headers=headers,
+            timeout=600.0,
+        ) as resp:
+            with active["lock"]:
+                active["run_id"] = resp.headers.get("X-Run-Id", "?")
+            if resp.status_code != 200:
+                with active["lock"]:
+                    active["error"] = f"HTTP {resp.status_code}: {resp.read().decode(errors='replace')}"
+                return
+            current_type: str | None = None
+            for line in resp.iter_lines():
+                if line.startswith("event: "):
+                    current_type = line[len("event: "):]
+                elif line.startswith("data: ") and current_type is not None:
+                    data = json.loads(line[len("data: "):])
+                    with active["lock"]:
+                        action, status_line = _handle_event(current_type, data, show_thinking, active)
+                        if status_line is not None:
+                            active["status_line"] = status_line
+                    if action == "stop":
+                        break
+    except httpx.HTTPError as exc:
+        with active["lock"]:
+            active["error"] = f"Connection failed: {exc}"
+    finally:
+        with active["lock"]:
+            active["done"] = True
+
+
+def _send_cancel(base_url: str, run_id: str | None, headers: dict[str, str]) -> None:
+    """Best-effort: swallows its own connection errors."""
+    if not run_id or run_id == "?":
+        return
+    with contextlib.suppress(httpx.HTTPError):
+        httpx.post(f"{base_url}/runs/{run_id}/signal", json={"type": "cancel"}, headers=headers, timeout=5.0)
+
+
+@st.fragment(run_every="0.2s")
+def _live_run() -> None:
+    """Renders the in-flight turn and a Stop button, ticking independently
+    of the main script so the button stays clickable while a background
+    thread is still streaming — `st.write_stream` blocked the whole script,
+    which made a Stop button unclickable until the stream finished on its
+    own. Idle cost when nothing is running: one cheap no-op tick every
+    0.2s, accepted as the simplest option for a diagnostic client."""
+    active = st.session_state.get("active_run")
+    if active is None:
+        return
+    with active["lock"]:
+        snapshot = {k: v for k, v in active.items() if k != "lock"}
+
+    with st.chat_message("assistant"):
+        if snapshot["status_line"] and not snapshot["done"]:
+            st.caption(snapshot["status_line"])
+        if snapshot["text"]:
+            st.markdown(snapshot["text"])
+
+        if not snapshot["done"]:
+            return  # Stop button lives in the bottom bar, next to chat_input — see main script body.
+
+        if snapshot["error"]:
+            st.error(snapshot["error"])
+        elif snapshot["approval"]:
+            a = snapshot["approval"]
+            target = a.get("tool_name") or a.get("domain") or "plan"
+            st.warning(
+                f"⚠️ Approval needed — **{a['kind']}**: `{target}`\n\n"
+                "This simple client doesn't answer approvals live (needs a background "
+                "connection outside Streamlit's rerun model). Answer manually:\n\n"
+                f"```bash\ncurl -X POST {snapshot['base_url']}/runs/{a['run_id']}/signal "
+                f"-H 'Content-Type: application/json' "
+                f"-d '{{\"approval_id\": \"{a['approval_id']}\", \"decision\": \"allow_once\"}}'\n```"
+            )
+        else:
+            text = snapshot["final_text"] if snapshot["final_text"] is not None else snapshot["text"]
+            if snapshot["was_cancelled"]:
+                text = f"{text or ''}\n\n*⏹ stopped*"
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": text or "",
+                "thinking": snapshot["thinking_text"],
+                "tool_calls": list(snapshot["tool_calls"].values()),
+            })
+
+    st.session_state.active_run = None
+    st.rerun()
 
 
 st.set_page_config(page_title="Agent Harness Chat", page_icon="💬")
@@ -115,12 +240,15 @@ with st.sidebar:
     if st.button("New session"):
         st.session_state.session_name = f"streamlit-{uuid.uuid4().hex[:8]}"
         st.session_state.messages = []
+        st.session_state.active_run = None
         st.rerun()
 
 st.title("💬 Agent Harness Chat")
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
+if "active_run" not in st.session_state:
+    st.session_state.active_run = None
 
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
@@ -128,68 +256,33 @@ for msg in st.session_state.messages:
             _render_details(st.container(), msg)
         st.markdown(msg["content"])
 
-prompt = st.chat_input("Message the agent...", disabled=agent_name is None)
+active_run = st.session_state.active_run
+run_in_progress = active_run is not None
 
-if prompt and agent_name:
+with st.bottom:
+    if run_in_progress:
+        with active_run["lock"]:
+            live_run_id = active_run["run_id"]
+        input_col, stop_col = st.columns([8, 1])
+        with input_col:
+            prompt = st.chat_input("Message the agent...", disabled=True)
+        with stop_col:
+            if live_run_id and st.button("⏹", help="Stop", key="stop_button"):
+                _send_cancel(active_run["base_url"], live_run_id, active_run["headers"])
+    else:
+        prompt = st.chat_input("Message the agent...", disabled=agent_name is None)
+
+if prompt and agent_name and not run_in_progress:
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    with st.chat_message("assistant"):
-        detail_area = st.container()  # reserved slot for thinking/tool-call expanders, filled in once the run ends
-        status = st.empty()
-        result: dict[str, Any] = {"final_text": None, "approval": None, "error": None}
+    active = _new_active_run(base_url, headers)
+    st.session_state.active_run = active
+    threading.Thread(
+        target=_stream_worker,
+        args=(base_url, agent_name, st.session_state.session_name, headers, prompt, show_thinking, active),
+        daemon=True,
+    ).start()
 
-        def event_stream() -> Any:
-            try:
-                with httpx.stream(
-                    "POST",
-                    f"{base_url}/agents/{agent_name}/runs",
-                    json={"message": prompt, "session_name": st.session_state.session_name},
-                    headers=headers,
-                    timeout=120.0,
-                ) as resp:
-                    if resp.status_code != 200:
-                        result["error"] = f"HTTP {resp.status_code}: {resp.read().decode(errors='replace')}"
-                        return
-                    run_id = resp.headers.get("X-Run-Id", "?")
-                    current_type: str | None = None
-                    for line in resp.iter_lines():
-                        if line.startswith("event: "):
-                            current_type = line[len("event: "):]
-                        elif line.startswith("data: ") and current_type is not None:
-                            data = json.loads(line[len("data: "):])
-                            handled = _handle_event(current_type, data, status, show_thinking, run_id, result)
-                            if handled == "delta":
-                                yield data["text"]
-                            if handled == "stop":
-                                return
-            except httpx.HTTPError as exc:
-                result["error"] = f"Connection failed: {exc}"
-
-        final_text = st.write_stream(event_stream)
-        status.empty()
-
-        if result["error"]:
-            st.error(result["error"])
-        elif result["approval"]:
-            a = result["approval"]
-            target = a.get("tool_name") or a.get("domain") or "plan"
-            st.warning(
-                f"⚠️ Approval needed — **{a['kind']}**: `{target}`\n\n"
-                "This simple client doesn't answer approvals live (needs a background "
-                "connection outside Streamlit's rerun model). Answer manually:\n\n"
-                f"```bash\ncurl -X POST {base_url}/runs/{a['run_id']}/signal "
-                f"-H 'Content-Type: application/json' "
-                f"-d '{{\"approval_id\": \"{a['approval_id']}\", \"decision\": \"allow_once\"}}'\n```"
-            )
-        else:
-            text = result["final_text"] if result["final_text"] is not None else final_text
-            msg = {
-                "role": "assistant",
-                "content": text or "",
-                "thinking": result.get("thinking_text", ""),
-                "tool_calls": list(result.get("tool_calls", {}).values()),
-            }
-            st.session_state.messages.append(msg)
-            _render_details(detail_area, msg)
+_live_run()

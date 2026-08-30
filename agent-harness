@@ -1,0 +1,15 @@
+#!/Users/simonfrank/Documents/dev/python/agent-harness/.venv/bin/python3.13
+"""Workaround launcher for the broken `agent-harness` console script.
+
+iCloud Drive keeps re-hiding the venv's editable-install .pth file (see
+CLAUDE.md), which Python 3.12+ silently skips, so the installed console
+script can't find the agent_harness package. Running this script directly
+avoids the problem entirely: Python puts *this file's own directory* (the
+repo root) on sys.path automatically, which is enough to import
+agent_harness without needing the .pth file at all.
+"""
+
+from agent_harness.cli import main
+
+if __name__ == "__main__":
+    main()

@@ -79,6 +79,39 @@ class TestRunWithToolCalls:
         on_tool_call.assert_called_once_with(tc)
 
 
+class TestCancellation:
+    def test_stops_at_the_next_turn_boundary(self) -> None:
+        tc = ToolCall(id="tc_1", name="fetch", arguments={})
+        calls_before_cancel = 2
+        state = {"calls": 0}
+
+        def is_cancelled() -> bool:
+            return state["calls"] >= calls_before_cancel
+
+        def counting_chat_fn(*args: object, **kwargs: object) -> Response:
+            state["calls"] += 1
+            return _response("still going", stop_reason="tool_use", tool_calls=[tc])
+
+        on_tool_call = MagicMock(return_value=ToolResult(tool_call_id="tc_1", output="ok"))
+        messages = [Message(role="user", content="go")]
+        cb = LoopCallbacks(is_cancelled=is_cancelled, on_tool_call=on_tool_call)
+        run(counting_chat_fn, messages, [], _config(max_turns=10), callbacks=cb)
+        assert state["calls"] == calls_before_cancel
+
+    def test_no_cancellation_runs_normally(self) -> None:
+        chat_fn = MagicMock(return_value=_response("hi"))
+        cb = LoopCallbacks(is_cancelled=lambda: False)
+        result = run(chat_fn, [Message(role="user", content="hi")], [], _config(), callbacks=cb)
+        assert result == "hi"
+
+    def test_is_cancelled_passed_to_chat_fn(self) -> None:
+        chat_fn = MagicMock(return_value=_response("hi"))
+        is_cancelled = MagicMock(return_value=False)
+        cb = LoopCallbacks(is_cancelled=is_cancelled)
+        run(chat_fn, [Message(role="user", content="hi")], [], _config(), callbacks=cb)
+        assert chat_fn.call_args.kwargs["is_cancelled"] is is_cancelled
+
+
 class TestRunMaxTurns:
     def test_stops_at_max_turns(self) -> None:
         tc = ToolCall(id="tc_1", name="read_file", arguments={})

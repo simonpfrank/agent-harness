@@ -49,6 +49,7 @@ def make_callbacks(
     plan_prompt_fn: OnPlanApproval | None = None,
     tmp_dir: str = "tmp",
     output_sink: OutputSink | None = None,
+    is_cancelled: Callable[[], bool] | None = None,
 ) -> LoopCallbacks:
     def on_delta(agent_id: str, text: str) -> None:
         if show_output:
@@ -151,4 +152,5 @@ def make_callbacks(
         on_completion_status=on_completion_status,
         is_budget_exceeded=is_budget_exceeded,
         on_thrash_detected=on_thrash_detected,
+        is_cancelled=is_cancelled,
     )

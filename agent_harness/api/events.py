@@ -15,6 +15,7 @@ THRASH_WARNING = "thrash_warning"
 APPROVAL_NEEDED = "approval_needed"
 HEARTBEAT = "heartbeat"
 DONE = "done"
+CANCELLED = "cancelled"
 ERROR = "error"
 
 

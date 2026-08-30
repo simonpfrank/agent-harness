@@ -7,7 +7,11 @@ import json
 import logging
 import os
 import re
+import signal
 import sys
+import threading
+from collections.abc import Generator
+from contextlib import contextmanager
 from datetime import datetime
 
 from dotenv import load_dotenv
@@ -239,6 +243,25 @@ def _make_timing_sink() -> OutputSink:
     )
 
 
+@contextmanager
+def _graceful_sigint(cancel_event: threading.Event) -> Generator[None, None, None]:
+    """Install a SIGINT handler that sets `cancel_event` instead of raising
+    `KeyboardInterrupt`, for the duration of one turn.
+
+    Lets a running loop stop gracefully at its next turn-boundary/mid-stream
+    checkpoint instead of the whole process dying mid-turn. Restores the
+    previous handler immediately after, so Ctrl-C at the next input prompt
+    still behaves exactly as before (raises `KeyboardInterrupt`, exits the
+    REPL).
+    """
+    cancel_event.clear()
+    previous_handler = signal.signal(signal.SIGINT, lambda _signum, _frame: cancel_event.set())
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGINT, previous_handler)
+
+
 def run_agent(
     agent_dir: str,
     prompt: str | None = None,
@@ -259,6 +282,7 @@ def run_agent(
             timestamped delta/thinking lines, for comparing raw
             performance against `chat/cli.py`'s equivalent output.
     """
+    cancel_event = threading.Event()
     try:
         config = config_loader.load(agent_dir)
         if overrides:
@@ -271,6 +295,7 @@ def run_agent(
             show_output=not timing,
             trace_enabled=True,
             output_sink=_make_timing_sink() if timing else None,
+            is_cancelled_fn=cancel_event.is_set,
         )
     except (FileNotFoundError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
@@ -288,7 +313,8 @@ def run_agent(
 
     if prompt:
         try:
-            runtime.run_messages(messages, prompt=prompt)
+            with _graceful_sigint(cancel_event):
+                runtime.run_messages(messages, prompt=prompt)
         except RuntimeError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             _save()
@@ -306,7 +332,8 @@ def run_agent(
             if not user_input.strip():
                 continue
             try:
-                runtime.run_messages(messages, prompt=user_input)
+                with _graceful_sigint(cancel_event):
+                    runtime.run_messages(messages, prompt=user_input)
             except RuntimeError as exc:
                 print(f"Error: {exc}", file=sys.stderr)
                 continue

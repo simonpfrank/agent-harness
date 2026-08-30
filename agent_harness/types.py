@@ -106,6 +106,7 @@ OnDelta = Callable[[str, str], None]
 OnCompletionStatus = Callable[[bool, str], None]
 OnIsBudgetExceeded = Callable[[], bool]
 OnThrashDetected = Callable[[str, str], None]
+OnIsCancelled = Callable[[], bool]
 
 
 @dataclass
@@ -122,6 +123,7 @@ class LoopCallbacks:
     on_completion_status: OnCompletionStatus | None = None
     is_budget_exceeded: OnIsBudgetExceeded | None = None
     on_thrash_detected: OnThrashDetected | None = None
+    is_cancelled: OnIsCancelled | None = None
 
 
 @dataclass

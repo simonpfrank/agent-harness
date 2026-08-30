@@ -7,11 +7,13 @@ genuine concurrency) is tests/integration/test_api_server.py's job.
 
 import threading
 import time
+import uuid
 from unittest.mock import MagicMock, patch
 
+from agent_harness import config as config_loader
 from agent_harness.api.events import SseEvent
 from agent_harness.api.registry import RunRegistry
-from agent_harness.api.routes import _sse_stream, create_app
+from agent_harness.api.routes import _run_worker, _sse_stream, create_app
 
 AGENTS_DIR = "tests/data"
 
@@ -148,6 +150,118 @@ class TestSignalValidation:
         assert resp.status_code == 202
         t.join(timeout=2.0)
         assert results == [{"decision": "allow_once"}]
+
+
+class TestSignalCancel:
+    def test_type_cancel_calls_request_cancel_and_returns_202(self) -> None:
+        registry = RunRegistry()
+        registry.start_run("run-1", "session-1")
+        app = create_app(agents_dir=AGENTS_DIR, registry=registry)
+        client = app.test_client()
+        resp = client.post("/runs/run-1/signal", json={"type": "cancel"})
+        assert resp.status_code == 202
+        assert registry.is_cancelled("run-1") is True
+
+    def test_type_cancel_on_unknown_run_still_returns_202(self) -> None:
+        # Stopping an already-finished/unknown run isn't an error — the
+        # caller's intent (this run should stop) is trivially satisfied.
+        app = create_app(agents_dir=AGENTS_DIR)
+        client = app.test_client()
+        resp = client.post("/runs/no-such-run/signal", json={"type": "cancel"})
+        assert resp.status_code == 202
+
+
+class TestCancelledEvent:
+    """A run that finishes (run_messages returns) after being asked to
+    cancel must report `cancelled`, not `done` — the client needs to know
+    this ended because it asked, not because the agent naturally finished."""
+
+    def test_completing_after_cancel_pushes_cancelled_not_done(self) -> None:
+        registry = RunRegistry()
+        app = create_app(agents_dir=AGENTS_DIR, registry=registry)
+        client = app.test_client()
+        fixed_run_id = uuid.uuid4()
+
+        def fake_run_messages(messages: object, prompt: str | None = None) -> str:
+            registry.request_cancel(fixed_run_id.hex)
+            return "partial answer"
+
+        fake_runtime = MagicMock()
+        fake_runtime.init_messages.return_value = []
+        fake_runtime.run_messages.side_effect = fake_run_messages
+        fake_runtime.budget.summary.return_value = "Turn 1/10 | $0.00/$0.10"
+
+        with (
+            patch("agent_harness.api.routes.prepare_runtime", return_value=fake_runtime),
+            patch("agent_harness.api.routes.uuid.uuid4", return_value=fixed_run_id),
+        ):
+            resp = client.post(
+                "/agents/valid_agent/runs", json={"message": "hi", "session_name": "cancel-event-test"},
+            )
+            body = resp.get_data(as_text=True)
+
+        assert "event: cancelled" in body
+        assert "event: done" not in body
+        assert "partial answer" in body
+
+    def test_not_cancelled_still_pushes_done(self) -> None:
+        registry = RunRegistry()
+        app = create_app(agents_dir=AGENTS_DIR, registry=registry)
+        client = app.test_client()
+
+        fake_runtime = MagicMock()
+        fake_runtime.init_messages.return_value = []
+        fake_runtime.run_messages.return_value = "the answer"
+        fake_runtime.budget.summary.return_value = "Turn 1/10 | $0.00/$0.10"
+
+        with patch("agent_harness.api.routes.prepare_runtime", return_value=fake_runtime):
+            resp = client.post(
+                "/agents/valid_agent/runs", json={"message": "hi", "session_name": "no-cancel-test"},
+            )
+            body = resp.get_data(as_text=True)
+
+        assert "event: done" in body
+        assert "event: cancelled" not in body
+
+
+class TestReaderGoneMidRun:
+    """The reader can disconnect (Ctrl-C, cancellation making an abandoned
+    run finish fast, a dropped connection) while the worker is still
+    executing — every event the worker tries to push afterward must not
+    crash the worker thread. Real bug found live (2026-08-23): a
+    `thinking_delta` firing after `registry.end_run()` had already run
+    crashed the worker with an uncaught `UnknownRunError`, logged
+    misleadingly as "crashed unexpectedly"."""
+
+    def test_events_pushed_after_reader_disconnect_do_not_crash_the_worker(self) -> None:
+        # Deterministic, no races: simulate "the reader already disconnected
+        # and released this run" (what _sse_stream's own GeneratorExit
+        # handler does) by ending it *before* the worker gets a chance to
+        # push anything, then call _run_worker directly and confirm it
+        # completes cleanly instead of logging a false "crashed unexpectedly".
+        registry = RunRegistry()
+        config = config_loader.load(f"{AGENTS_DIR}/valid_agent")
+        registry.start_run("run-1", "session-1")
+        registry.end_run("run-1")
+
+        def fake_run_messages(messages: object, prompt: str | None = None) -> str:
+            output_sink = mock_prepare_runtime.call_args.kwargs["output_sink"]
+            output_sink.on_delta("default", "still generating...")  # must not raise
+            output_sink.on_thinking_delta("default", "still thinking...")  # must not raise
+            return "answer"
+
+        fake_runtime = MagicMock()
+        fake_runtime.init_messages.return_value = []
+        fake_runtime.run_messages.side_effect = fake_run_messages
+        fake_runtime.budget.summary.return_value = "Turn 1/10 | $0.00/$0.10"
+
+        with (
+            patch("agent_harness.api.routes.prepare_runtime", return_value=fake_runtime) as mock_prepare_runtime,
+            patch("agent_harness.api.routes.logger") as mock_logger,
+        ):
+            _run_worker(registry, "run-1", config, "tests/data/valid_agent/sessions", None, "hi")
+
+        mock_logger.exception.assert_not_called()  # no false "crashed unexpectedly"
 
 
 class TestWorkerFailureSafety:

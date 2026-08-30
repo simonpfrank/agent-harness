@@ -32,6 +32,21 @@ class TestOutputSinkThreading:
         runtime.finalize()
 
 
+class TestIsCancelledThreading:
+    def test_is_cancelled_fn_passed_through_to_callbacks(self) -> None:
+        config = load_config(VALID_AGENT)
+        is_cancelled = lambda: True  # noqa: E731
+        runtime = prepare_runtime(
+            config,
+            permission_prompt_fn=lambda _tc: PermissionDecision.deny(),
+            show_output=False,
+            trace_enabled=False,
+            is_cancelled_fn=is_cancelled,
+        )
+        assert runtime.callbacks.is_cancelled is is_cancelled
+        runtime.finalize()
+
+
 class TestPreparedRuntimeBudget:
     def test_exposes_budget_instance(self) -> None:
         config = load_config(VALID_AGENT)

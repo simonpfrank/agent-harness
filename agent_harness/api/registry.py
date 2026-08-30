@@ -35,6 +35,7 @@ class _RunState:
         self.session_id = session_id
         self.queue: queue.Queue[SseEvent] = queue.Queue()
         self.pending: dict[str, _PendingSignal] = {}
+        self.cancel_event = threading.Event()
 
 
 class RunRegistry:
@@ -85,6 +86,30 @@ class RunRegistry:
             UnknownRunError: If `run_id` isn't registered.
         """
         self._get_state(run_id).queue.put(event)
+
+    def try_push_event(self, run_id: str, event: SseEvent) -> bool:
+        """Enqueue an event, tolerating a reader that already disconnected.
+
+        A run's worker thread keeps executing after its reader vanishes
+        (Ctrl-C, cancellation making an abandoned run finish quickly, a
+        plain dropped connection) until it hits its own next checkpoint —
+        every event it tries to push in the meantime would otherwise crash
+        the worker via `push_event`'s `UnknownRunError`. Callers that
+        genuinely need to know about a bad run_id (tests, anything outside
+        a live run's own event stream) should keep using `push_event`.
+
+        Args:
+            run_id: Run to push the event onto.
+            event: Event to enqueue.
+
+        Returns:
+            `True` if enqueued, `False` if the run is no longer registered.
+        """
+        try:
+            self.push_event(run_id, event)
+        except UnknownRunError:
+            return False
+        return True
 
     def pop_event(self, run_id: str, timeout: float) -> SseEvent | None:
         """Block for the next event on a run's stream.
@@ -148,6 +173,34 @@ class RunRegistry:
             raise UnknownRunError(f"No pending signal {approval_id!r} for run {run_id!r}")
         signal.payload = payload
         signal.event.set()
+
+    def request_cancel(self, run_id: str) -> None:
+        """Signal that a run should stop gracefully at its next checkpoint.
+
+        Args:
+            run_id: Run to cancel. A no-op if `run_id` is unknown (already
+                ended, or never started) — stopping an already-finished run
+                isn't an error.
+        """
+        with self._lock:
+            state = self._runs.get(run_id)
+        if state is not None:
+            state.cancel_event.set()
+
+    def is_cancelled(self, run_id: str) -> bool:
+        """Check whether a run has been asked to stop.
+
+        Args:
+            run_id: Run to check.
+
+        Returns:
+            `True` if `request_cancel` was called for this run. `False` for
+            an unknown run_id — same "not an error" reasoning as
+            `request_cancel`.
+        """
+        with self._lock:
+            state = self._runs.get(run_id)
+        return state.cancel_event.is_set() if state is not None else False
 
     def _get_state(self, run_id: str) -> _RunState:
         with self._lock:

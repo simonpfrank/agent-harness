@@ -1,6 +1,6 @@
 name: local-coder
 provider: openai
-model: qwen/qwen3-4b-thinking-2507
+model: qwen3.5-2b-mlx
 loop: react
 tools: [run_command, read_file, execute_code]
 max_turns: 15
