@@ -16,6 +16,9 @@ Ranked list of everything currently committed to build (drawn from `Near-term Im
 1. Parallel tool-call execution within a turn — shipped, see Done below.
 2. Parallel sub-agent fan-out — still no concrete driver, stays deferred
 
+**Track C — Capability expansion:**
+1. RAG framework/tools — see "RAG framework/tools" below; design already captured in `docs/rag-plan.md`. Start with the smallest useful slice (text + tool + Chroma), not the full design.
+
 **Shelved (2026-08-19), not in this ranking:** Adaptive re-planning — a full design exists (see Ideas below) but was pulled *during* plan mode when a direct check found zero example agents actually use `loop: plan_execute` yet. Investing in adaptation logic for an unused code path is exactly the "no code-level tweaks without hard evidence" mistake this project already corrected once (the prompt-override-file retraction). Next step before this returns to Priority Order: build and actually run a real `plan_execute`-based agent, see if the static-plan limitation genuinely bites.
 
 **Deprioritized, no pressing need (2026-08-15):** CLI REPL single-keypress prompts, CLI REPL `#` type-ahead tool invocation — left scoped below for whenever a real need surfaces. `!` prefix for inline shell stays as an optional quick win, not urgent.

@@ -22,6 +22,7 @@ As a summary, be able to run an agent in a cli, and if it needs more inputs just
 - **CLI config overrides** — `--provider`, `--model`, `--loop`, `--max-turns` etc. without editing files
 - **Structured traces** — JSONL files with full conversation replay (prompts, responses, tool I/O)
 - **Budget enforcement** — turn limits and cost ceilings, deterministic (never exceeded), with a live "turns/cost remaining" note injected each turn
+- **Real cancellation** — Ctrl-C (CLI) or a Stop button (API/Streamlit) actually stops a run mid-turn, not just at the end (turn-boundary + mid-stream checkpoints); mid-tool-call kill isn't built yet
 - **Pluggable executor** — swap subprocess for Docker or any other sandbox
 - **Context window management** — automatic trimming when approaching model limits
 - **Scaffold command** — `agent-harness init my-agent` creates a ready-to-run agent
