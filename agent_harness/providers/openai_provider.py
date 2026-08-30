@@ -462,19 +462,32 @@ def _build_create_kwargs(
     return create_kwargs
 
 
-def _stream_responses_deltas(stream: Any, on_delta: Any) -> Response:
+def _stream_responses_deltas(stream: Any, on_delta: Any, is_cancelled: Any = None) -> Response:
     """Consume a ResponseStream, dispatching text deltas, and return the final Response.
 
     Args:
         stream: Open `ResponseStream` context manager value.
         on_delta: Optional callback for text deltas, `(agent_id, chunk)`.
+        is_cancelled: Optional `() -> bool`, checked once per event. On
+            `True`, stops consuming immediately and returns whatever was
+            accumulated locally so far with `stop_reason="cancelled"` —
+            mirrors `anthropic.py::_stream_deltas`: the cancelled path must
+            never call `get_final_response()`, since that would pull the
+            rest of the stream through regardless.
 
     Returns:
-        Parsed Response built from the stream's final accumulated response.
+        Parsed Response built from the stream's final accumulated response,
+        or from local accumulation if cancelled mid-stream.
     """
+    text_parts: list[str] = []
     for event in stream:
-        if event.type == "response.output_text.delta" and on_delta is not None:
-            on_delta("default", event.delta)
+        if is_cancelled is not None and is_cancelled():
+            message = Message(role="assistant", content="".join(text_parts) or None)
+            return Response(message=message, usage=Usage(input_tokens=0, output_tokens=0), stop_reason="cancelled")
+        if event.type == "response.output_text.delta":
+            text_parts.append(event.delta)
+            if on_delta is not None:
+                on_delta("default", event.delta)
     return _to_response(stream.get_final_response())
 
 
@@ -630,7 +643,7 @@ def chat(
             return _to_response(client.chat.completions.create(**create_kwargs))
         if stream:
             with client.responses.stream(**create_kwargs) as response_stream:
-                return _stream_responses_deltas(response_stream, on_delta)
+                return _stream_responses_deltas(response_stream, on_delta, is_cancelled)
         return _to_response(client.responses.create(**create_kwargs))
 
     return cast(

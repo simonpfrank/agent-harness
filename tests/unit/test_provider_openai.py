@@ -604,6 +604,44 @@ class TestChatStreaming:
         )
         assert result.message.content == "hi"
 
+    @patch("agent_harness.providers.openai_provider._get_client")
+    def test_cancellation_stops_early_and_returns_partial_content(self, mock_get_client: MagicMock) -> None:
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+
+        # Cancel fires after the 2nd event — the 3rd/4th must never be seen.
+        events_seen: list[str] = []
+
+        def event_stream() -> Any:
+            for text in ["Hel", "lo", " there", "!"]:
+                events_seen.append(text)
+                yield MagicMock(type="response.output_text.delta", delta=text)
+
+        mock_stream = MagicMock()
+        mock_stream.__enter__.return_value = mock_stream
+        mock_stream.__exit__.return_value = False
+        mock_stream.__iter__.return_value = event_stream()
+        mock_client.responses.stream.return_value = mock_stream
+
+        call_count = {"n": 0}
+
+        def is_cancelled() -> bool:
+            call_count["n"] += 1
+            return call_count["n"] > 2
+
+        result = chat(
+            [Message(role="user", content="hi")],
+            tools=[],
+            model="gpt-5-mini",
+            stream=True,
+            is_cancelled=is_cancelled,
+        )
+
+        assert result.message.content == "Hello"
+        assert result.stop_reason == "cancelled"
+        assert events_seen == ["Hel", "lo", " there"]  # generator advanced once more, event never processed
+        mock_stream.get_final_response.assert_not_called()
+
 
 def _cc_chunk(
     content: str | None = None, tool_calls: list[Any] | None = None, reasoning_content: str | None = None,

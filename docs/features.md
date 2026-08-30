@@ -175,10 +175,11 @@ Both the plain CLI and the API support stopping a run mid-turn rather than
 only between turns. Two real checkpoints, deliberately not more: a
 turn-boundary check (`LoopCallbacks.is_cancelled`, same shape/placement as
 the existing `is_budget_exceeded`, checked once per turn in `react.py`
-before the next model call) and a mid-stream check inside both providers'
-streaming delta loops (`anthropic.py`, `openai_provider.py`'s Chat
-Completions path) — cancelling there returns a `Response` built from
-whatever text/thinking was accumulated locally so far, with
+before the next model call) and a mid-stream check inside every streaming
+delta loop across both providers (`anthropic.py`; `openai_provider.py`'s
+Chat Completions path used by local models, and its Responses API path
+used by hosted OpenAI models) — cancelling there returns a `Response` built
+from whatever text/thinking was accumulated locally so far, with
 `stop_reason="cancelled"`. **Mid-tool-call cancellation is explicitly not
 built** — `run_command`/`execute_code` use blocking `subprocess.run` with no
 live handle to kill early, so a stop requested while a tool call is in
