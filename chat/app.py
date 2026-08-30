@@ -252,6 +252,27 @@ def _live_run(base_url: str, agent_name: str | None, headers: dict[str, str], sh
 
 st.set_page_config(page_title="Agent Harness Chat", page_icon="💬")
 
+st.markdown(
+    """
+    <style>
+    div[data-testid="stHorizontalBlock"]:has(.st-key-stop_button) {
+        align-items: stretch;
+    }
+    .st-key-stop_button {
+        display: flex;
+        height: 100%;
+    }
+    .st-key-stop_button button {
+        border-color: #ff4b4b;
+        color: #ff4b4b;
+        height: 100%;
+        width: 100%;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 with st.sidebar:
     st.header("Connection")
     base_url = st.text_input("Server URL", value="http://127.0.0.1:8420").rstrip("/")
