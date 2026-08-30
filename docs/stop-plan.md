@@ -1,6 +1,6 @@
 # Real cancellation ("stop") — PRD
 
-**Status:** Shipped 2026-08-23. See `docs/roadmap.md`'s "Real cancellation" Done entry for the build summary and real, zero-mock verification (including a genuine reader-disconnect race found and fixed live, not scoped here originally).
+**Status:** Shipped 2026-08-23. See `docs/roadmap.md`'s "Real cancellation" Done entry for the build summary and real, zero-mock verification (including a genuine reader-disconnect race found and fixed live, not scoped here originally). **2026-08-30:** five further real bugs found and fixed the first time this was actually exercised end-to-end (OpenAI Responses API path never got cancellation at all; the Streamlit Stop button never rendered mid-stream, plus three bugs found fixing that; a cancelled prompt was leaking into the next request's context) — see that same Done entry's two 2026-08-30 addenda. Two known gaps remain, tracked in that same file's "Scoped out of real cancellation — backlog" section: mid-tool-call kill (original, confirmed-acceptable v1 scope) and a dangling `tool`-role message on a mid-turn (not turn-0) cancellation.
 
 ## Origin
 

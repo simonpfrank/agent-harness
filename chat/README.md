@@ -60,7 +60,15 @@ next to an in-progress turn — the streaming itself runs on a background
 thread, polled by a `st.fragment` ticking every 0.2s, specifically so the
 button stays clickable while a response is still streaming (a plain
 `st.write_stream` call blocks the whole script, which would make a Stop
-button unclickable until the stream finished on its own).
+button unclickable until the stream finished on its own). The fragment is
+the sole owner of the bottom bar (both the plain input and the Stop-button
+variant) — earlier it was split between the main script and the fragment,
+which meant the button never actually rendered mid-stream; fixed 2026-08-30
+after live browser testing caught it, see `docs/roadmap.md`.
+
+Interrupting a turn drops that prompt from the session's history entirely,
+as if it had never been sent — it won't resurface or get silently answered
+alongside your next message.
 
 ## Known limitations, by design (not bugs)
 

@@ -400,13 +400,13 @@ curl -N -X POST http://127.0.0.1:8420/agents/hello/runs \
   -d '{"message": "hi", "session_name": "my-chat"}'
 ```
 
-Response is a held-open `text/event-stream`: `delta`/`thinking_delta` chunks as the model talks, `tool_call`/`tool_result`/`budget`/`thrash_warning` events (the same visibility a CLI user already gets — not just answer text), `heartbeat` every 15s when there's nothing else to send, `approval_needed` if a tool/domain/plan approval is required (answer it via `POST /runs/<run_id>/signal` — the run's id comes back on the initial response's `X-Run-Id` header), and a final `done` event. `GET /agents` lists what's available to run.
+Response is a held-open `text/event-stream`: `delta`/`thinking_delta` chunks as the model talks, `tool_call`/`tool_result`/`budget`/`thrash_warning` events (the same visibility a CLI user already gets — not just answer text), `heartbeat` every 15s when there's nothing else to send, `approval_needed` if a tool/domain/plan approval is required (answer it via `POST /runs/<run_id>/signal` — the run's id comes back on the initial response's `X-Run-Id` header), and a final `done` event — or `cancelled` instead, same shape, if the run was stopped mid-flight via `POST /runs/<run_id>/signal` with `{"type": "cancel"}` (turn-boundary and mid-stream checkpoints; a tool call already in flight finishes on its own first). `GET /agents` lists what's available to run.
 
 **Security — read this before exposing beyond `localhost`.** Auth is a single shared-secret header (`X-API-Key`, from `AGENT_HARNESS_API_KEY`), checked in constant time. **Anyone holding a valid key can list, resume, and run every agent and every session on this server** — there is no per-user or per-session isolation on top of that secret; it grants everything the harness can do, the same way a working `--session` name in the CLI does. That's a deliberate, right-sized tradeoff for the current deployment model (home LAN or a single work machine, not internet-facing), not an oversight — full multi-user auth (accounts, tokens, rotation) is intentionally not built. The server binds to `127.0.0.1` by default; opening it up to a LAN is an explicit `--host` choice, not the default.
 
 Sessions get a GUID identity under the hood (mirrors Claude Code's session model) — a `session_name` you pass is just a label resolved on lookup, never the file's real key, so two different callers can never collide on an unqualified name. Only one run at a time is allowed per session; a second concurrent request against the same session gets `409` rather than silently racing.
 
-Full design background and what's deliberately deferred (real mid-run cancellation, full auth, agent management via the API, websockets): `docs/api-plan.md`.
+Full design background and what's still deliberately deferred (full auth, agent management via the API, websockets, killing a tool call already in flight): `docs/api-plan.md`. Real mid-run cancellation itself has since shipped — see that doc's item 6 and `docs/roadmap.md`'s "Real cancellation" Done entry.
 
 ## Verified Completion
 

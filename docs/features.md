@@ -209,9 +209,17 @@ uncaught, crashing the worker thread and logging a misleading "crashed
 unexpectedly." `RunRegistry.try_push_event` tolerates this now; every push
 site in the API's `OutputSink`/`_execute_run` uses it. `push_event` itself
 keeps raising for callers that genuinely want to know about a bad run_id.
-**Streamlit's own Stop button UX is a separate, deferred follow-up** —
-`chat/app.py` blocks the whole script on `st.write_stream` while streaming,
-so a button can't be clicked mid-stream with today's structure.
+**Streamlit's own Stop button is built and verified working** (2026-08-30,
+after live browser testing found the original build had never actually
+rendered it mid-stream — see `docs/roadmap.md`'s "Real cancellation" Done
+entry, 2026-08-30 addendum, for the four real bugs found and fixed).
+`chat/app.py`'s `_live_run()`, an `@st.fragment(run_every="0.2s")`, is the
+sole owner of the bottom bar (plain input, or disabled input + Stop button)
+so the button reliably renders and is clickable throughout a streaming
+response, not just once it finishes. Clicking it sends the same
+`{"type": "cancel"}` signal described above; an interrupted prompt is
+dropped from session history entirely (not left dangling for the next
+request to silently answer alongside).
 
 ## Tools
 

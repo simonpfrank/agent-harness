@@ -331,6 +331,39 @@ bigger, cross-cutting change not needed to solve the actual problem
 
 ---
 
+## Scoped out of real cancellation — backlog
+
+Known gaps in "Real cancellation" (see its Done entry above), recorded
+here with the reason each is still open rather than left only as prose
+buried in that entry's addenda.
+
+### Mid-tool-call kill
+
+Cancelling while a tool call (`run_command`/`execute_code`) is actually
+executing has no effect until that call finishes on its own — both use
+blocking `subprocess.run`, with no live handle to kill early. **Cut from
+the original 2026-08-22 build:** confirmed acceptable v1 scope directly
+with the user — the driving case was rambling *thinking*, which happens
+before any tool call, not a stuck tool. Would need restructuring
+`tools.py` to `Popen`+poll, real separate work with no evidence yet that
+it's the actual pain point.
+
+### Dangling `tool`-role message on mid-turn cancellation (added 2026-08-30)
+
+Cancelling *after* a turn's tool calls have executed and their results
+appended (`role="tool"`), but before the next assistant reply — i.e. at
+the turn-boundary check for turn N>0, not turn 0 — leaves that trailing
+`tool`-role message dangling with no assistant reply, the same structural
+problem the 2026-08-30 fix solved for a trailing `user`-role message.
+**Cut:** popping it back to the prior assistant `tool_use` message would
+leave that message with no matching `tool_result`, likely invalid for the
+next real provider call — a harder problem than the `user`-role case, not
+reported by the user, not attempted speculatively. Real follow-up if it's
+ever hit in practice; `loops/react.py::run`'s cancellation-return branch is
+the place to extend if so.
+
+---
+
 ## Ideas
 
 These are captured so they are not lost. They are not commitments.
@@ -967,6 +1000,86 @@ Full PRD-then-plan cycle, written up in `docs/stop-plan.md` (now marked Shipped)
 **A second real, independent bug found during live verification, not part of the original plan — fixed the same day since it directly undermines cancellation's own reliability:** the API's `RunRegistry.push_event` raises `UnknownRunError` once a run's reader has disconnected and released it (the 2026-08-22 disconnect-lock-release fix's own `end_run()` call) — previously harmless in practice only because an abandoned run kept running for a long time before its worker got around to pushing anything else. Real cancellation makes an abandoned run finish in seconds instead, so a worker still mid-turn when its reader vanishes now reliably tries to push more events (deltas, thinking deltas, the terminal event) to an already-unregistered run — every one of those uncaught `UnknownRunError`s propagated through `_run_worker`'s generic exception handler and got logged as "crashed unexpectedly," a misleading label for what's actually an expected, benign race. Confirmed live against a real local LM Studio model, not guessed: a genuine Ctrl-C mid-thinking-stream produced exactly this crash trace on the first attempt. Fixed with a new `RunRegistry.try_push_event(run_id, event) -> bool`, tolerating an unregistered run instead of raising; every push site in `api/callbacks.py`'s `OutputSink` and `api/routes.py::_execute_run`'s terminal/error events now uses it. `push_event` itself keeps its raising behavior for callers that genuinely want to know about a bad run_id.
 
 Verified end-to-end against the real running server and a real local model, not just unit tests: a real `chat/cli.py` subprocess, real thinking tokens observed streaming, a real `SIGINT` mid-stream — client returned to the `>` prompt immediately, server log showed `Turn 1: 0 in / 0 out tokens` (the cancelled-path zero `Usage`, exactly as designed) and no crash trace, a fresh request against the same session succeeded immediately. Separately verified the full `anthropic.py::chat()` path (not just the raw SDK experiment) against the live Anthropic API: cancelled after 2.69s with 802 characters of genuine partial content and `stop_reason="cancelled"`, versus 30+ seconds for the same prompt's full response. `pytest tests/unit -q` → 817 passed (up from 791); `pytest tests/integration/test_concurrency_safety.py tests/integration/test_api_server.py` → 9 passed; ruff clean; `mypy --strict` clean (108 files); `radon cc --min D` → none (`react.py::run` briefly regressed to D(21) after the turn-boundary check and `is_cancelled` kwarg landed — fixed by extracting the existing tool-call/thrash-detection block into a new `_handle_tool_calls` helper, back to C(16), checked explicitly rather than assumed safe). `docs/stop-plan.md` status updated to Shipped, `docs/features.md` updated (Agent loops section, HTTP API server section, Configuration & CLI section).
+
+**Addendum (2026-08-30): the OpenAI Responses API streaming path never got
+cancellation at all.** Found while explaining the mechanism to the user,
+not part of a planned task: `openai_provider.py::_stream_responses_deltas`
+(hosted OpenAI models, e.g. `gpt-5-mini`) never accepted an `is_cancelled`
+parameter — cancellation worked for local/Chat-Completions-style OpenAI
+models and Anthropic, but silently did nothing for hosted OpenAI Responses
+models mid-stream. Not scoped out anywhere; a real oversight from the
+original build. Fixed with the same per-event-check-then-locally-accumulate
+pattern as the other two paths. TDD, red confirmed first. `docs/features.md`
+corrected — it had implied the Responses API path was already covered.
+
+**Addendum (2026-08-30): the Streamlit Stop button had never actually
+worked, plus a real backend history bug found alongside it.** User asked
+to "build the Streamlit stop button" — it looked already built (code
+existed since this entry's original 2026-08-23 build, `chat/README.md`
+described it as working) but live browser verification (Playwright +
+headless Chromium against a real running server, not assumed) found the
+button's DOM count stayed 0 through 12s of real streaming; user
+independently confirmed the same. Four real bugs found and fixed, none
+guessed:
+1. **Button never rendered mid-stream.** The bottom bar lived in the main
+   script body, gated on a value snapshotted once per *full* script rerun,
+   but the streaming display lived in `_live_run()`, an
+   `@st.fragment(run_every="0.2s")` — a fragment's auto-ticks only rerun
+   code *inside* the fragment. Nothing forced a full rerun while a run was
+   active. Fixed by making `_live_run()` the sole owner of the entire
+   bottom bar.
+2. **Real backend bug, unrelated to Streamlit**: `loops/react.py`'s
+   turn-boundary cancellation check can fire before `chat_fn` is ever
+   called on turn 0, so `messages` still ends with the *user's* own
+   message — the old return value echoed the prompt back as if it were the
+   assistant's answer. Confirmed via a raw SSE client bypassing Streamlit
+   entirely. Fixed: only return `last.content` when `last.role ==
+   "assistant"`.
+3. **Duplicate bottom bar**: writing `st.bottom` from both the main script
+   and the fragment in the same script execution stacks rather than
+   replaces — two visibly duplicated input rows for the run's whole
+   duration. Fixed by making the fragment the *only* `st.bottom` writer in
+   the app.
+4. **Vanishing user message bubble**: a side effect of fix #3 — the user's
+   own bubble, drawn once on the fragment's first pass, vanished on every
+   subsequent tick (a fragment's region is replaced wholesale each rerun,
+   and later ticks take the "active run" branch, which never draws it).
+   Fixed with an explicit `st.rerun()` right after starting the background
+   thread.
+
+Manually testing the fixed button, the user then reported: "if I interrupt
+it tends to try the last interrupted request as well as the new one."
+Root-caused against the real API: `api/routes.py::_execute_run` persists
+`session.messages` unconditionally, even when cancelled — bug #2's fix
+stopped the echo *symptom* but the dangling, never-answered prompt still
+got saved, so the next real request's prompt landed right after it with no
+assistant reply in between (two consecutive `user`-role messages,
+confirmed in the saved session JSON; the model answered both). Fixed in
+`loops/react.py::run`: when cancelled with nothing generated and the
+trailing message is `role == "user"`, pop it before returning — `messages`
+is mutated in place and that same list is what gets persisted, so this
+removes the dangling prompt from history entirely.
+
+**Deliberately left open, not attempted**: the equivalent case for a
+trailing `tool`-role message (cancelling mid-tool-call, after tool results
+are appended but before the next assistant reply) is different and harder
+— popping it back to the prior assistant `tool_use` message would leave
+that message with no matching `tool_result`, likely invalid for the next
+real provider call. Not reported by the user, not guessed at. Real
+follow-up item if it's ever hit in practice.
+
+The button was also given red border/glyph styling and height-matched to
+the chat input via flex stretch on the row (not a hardcoded pixel value),
+confirmed visually against the user's own browser screenshot rather than
+assumed from a scripted check. `pytest tests/unit -q` → 820 passed (up
+from 817 at the start of the day); ruff clean; `mypy --strict` clean;
+`radon cc --min C` → `react.py::run` stays C(16) throughout. All four bugs
+verified live: Playwright + headless Chromium against a real
+`agent-harness serve` + `streamlit run`, both a fast (Anthropic Haiku) and
+a genuinely slow (local LM Studio `qwen3.5-4b-mlx`) agent, immediate-click
+and mid-stream-click cases, screenshots inspected directly; the
+history-leak fix verified with a raw API reproduction (cancel, resend,
+inspect the saved session file) both before and after the fix.
 
 ### Step-level tool-call thrashing breaker (added 2026-08-15, resolved 2026-08-15)
 
