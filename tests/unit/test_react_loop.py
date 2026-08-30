@@ -111,6 +111,17 @@ class TestCancellation:
         run(chat_fn, [Message(role="user", content="hi")], [], _config(), callbacks=cb)
         assert chat_fn.call_args.kwargs["is_cancelled"] is is_cancelled
 
+    def test_cancelled_before_first_call_returns_empty_not_the_prompt(self) -> None:
+        """Cancelling at turn 0's boundary check means chat_fn is never called, so
+        `messages` still ends with the user's own message — the return value must
+        not echo that back as if it were the assistant's answer."""
+        chat_fn = MagicMock(return_value=_response("should never be reached"))
+        cb = LoopCallbacks(is_cancelled=lambda: True)
+        messages = [Message(role="user", content="do the thing")]
+        result = run(chat_fn, messages, [], _config(), callbacks=cb)
+        assert result == ""
+        chat_fn.assert_not_called()
+
 
 class TestRunMaxTurns:
     def test_stops_at_max_turns(self) -> None:

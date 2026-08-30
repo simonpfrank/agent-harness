@@ -160,16 +160,49 @@ def _send_cancel(base_url: str, run_id: str | None, headers: dict[str, str]) -> 
 
 
 @st.fragment(run_every="0.2s")
-def _live_run() -> None:
-    """Renders the in-flight turn and a Stop button, ticking independently
+def _live_run(base_url: str, agent_name: str | None, headers: dict[str, str], show_thinking: bool) -> None:
+    """Owns the entire bottom bar (plain input, or disabled input + Stop
+    button) as well as the in-flight turn's display, ticking independently
     of the main script so the button stays clickable while a background
     thread is still streaming — `st.write_stream` blocked the whole script,
     which made a Stop button unclickable until the stream finished on its
-    own. Idle cost when nothing is running: one cheap no-op tick every
-    0.2s, accepted as the simplest option for a diagnostic client."""
+    own.
+
+    Must be the *only* writer of `st.bottom` in the whole app: the main
+    script body used to also write a plain `st.chat_input` into `st.bottom`
+    on the script run where a prompt was first submitted (before
+    `active_run` existed yet), then this fragment wrote its own version of
+    `st.bottom` moments later in that same run — Streamlit doesn't replace
+    one write with the other, it stacks them, confirmed live as two visibly
+    duplicated input rows for the entire run. Funneling every `st.bottom`
+    write through this one fragment avoids that.
+
+    Idle cost when nothing is running: one cheap no-op tick every 0.2s,
+    accepted as the simplest option for a diagnostic client.
+    """
     active = st.session_state.get("active_run")
+
     if active is None:
+        with st.bottom:
+            prompt = st.chat_input("Message the agent...", disabled=agent_name is None)
+        if prompt and agent_name:
+            st.session_state.messages.append({"role": "user", "content": prompt})
+            new_active = _new_active_run(base_url, headers)
+            st.session_state.active_run = new_active
+            threading.Thread(
+                target=_stream_worker,
+                args=(base_url, agent_name, st.session_state.session_name, headers, prompt, show_thinking, new_active),
+                daemon=True,
+            ).start()
+            # Full app rerun, not just this fragment: the user bubble is drawn by
+            # the main script's history loop, which a fragment's own auto-ticks
+            # never re-execute — without this the bubble would render once here
+            # and then vanish on the very next 0.2s tick, when this fragment's
+            # region gets replaced wholesale by the "active is not None" branch
+            # below (confirmed live: the user's own message flashed then disappeared).
+            st.rerun()
         return
+
     with active["lock"]:
         snapshot = {k: v for k, v in active.items() if k != "lock"}
 
@@ -180,7 +213,14 @@ def _live_run() -> None:
             st.markdown(snapshot["text"])
 
         if not snapshot["done"]:
-            return  # Stop button lives in the bottom bar, next to chat_input — see main script body.
+            with st.bottom:
+                input_col, stop_col = st.columns([8, 1])
+                with input_col:
+                    st.chat_input("Message the agent...", disabled=True)
+                with stop_col:
+                    if snapshot["run_id"] and st.button("⏹", help="Stop", key="stop_button"):
+                        _send_cancel(snapshot["base_url"], snapshot["run_id"], snapshot["headers"])
+            return
 
         if snapshot["error"]:
             st.error(snapshot["error"])
@@ -256,33 +296,4 @@ for msg in st.session_state.messages:
             _render_details(st.container(), msg)
         st.markdown(msg["content"])
 
-active_run = st.session_state.active_run
-run_in_progress = active_run is not None
-
-with st.bottom:
-    if run_in_progress:
-        with active_run["lock"]:
-            live_run_id = active_run["run_id"]
-        input_col, stop_col = st.columns([8, 1])
-        with input_col:
-            prompt = st.chat_input("Message the agent...", disabled=True)
-        with stop_col:
-            if live_run_id and st.button("⏹", help="Stop", key="stop_button"):
-                _send_cancel(active_run["base_url"], live_run_id, active_run["headers"])
-    else:
-        prompt = st.chat_input("Message the agent...", disabled=agent_name is None)
-
-if prompt and agent_name and not run_in_progress:
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
-
-    active = _new_active_run(base_url, headers)
-    st.session_state.active_run = active
-    threading.Thread(
-        target=_stream_worker,
-        args=(base_url, agent_name, st.session_state.session_name, headers, prompt, show_thinking, active),
-        daemon=True,
-    ).start()
-
-_live_run()
+_live_run(base_url, agent_name, headers, show_thinking)

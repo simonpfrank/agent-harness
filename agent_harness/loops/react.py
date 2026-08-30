@@ -170,4 +170,6 @@ def run(
                 cb.on_thrash_detected(thrash_tool, thrash_detail)
 
     last = messages[-1] if messages else None
-    return last.content or "" if last else ""
+    if last is None or last.role != "assistant":
+        return ""  # Cancelled before the first chat_fn call — nothing generated yet.
+    return last.content or ""
