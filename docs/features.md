@@ -328,7 +328,9 @@ same pattern as `hooks`/`permissions`.
 
 ## Multimodal / file handling (`attachments.py`)
 
-Full PRD + as-built spec in `docs/multimodal-plan.md`. Two capabilities:
+Two capabilities (PRD `docs/multimodal-plan.md` deleted 2026-08-30 once
+fully superseded by this section; its scope exclusions, still accurate,
+folded in below):
 
 - **Vision/document input** — `view_image(path)` / `view_document(path)`
   (see Tools above) read a file, detect its media type from magic bytes
@@ -387,6 +389,17 @@ Full PRD + as-built spec in `docs/multimodal-plan.md`. Two capabilities:
   perception, not a guess) and a real local OpenAI-compatible LM Studio
   server (both the deterministic Chat-Completions note and a genuine live
   provider rejection surfacing cleanly, not crashing).
+- **Deliberately out of scope, decided at PRD time, not since revisited:**
+  image/file *generation* via a dedicated API (DALL·E etc. — `execute_code`
+  already covers this via matplotlib and similar); audio or video content;
+  CLI clipboard paste (needs the same raw-terminal-input layer already
+  scoped separately for the no-Enter-keypress and live `#` tool-filtering
+  roadmap items — bundle with that work if it happens, not before); a
+  generic "read any binary format" tool (purpose-built tools per format,
+  matching `profile_data.py`, is the deliberate pattern); eval-framework
+  support for grading binary/image output (`eval/graders/code/` already
+  supports arbitrary custom graders — someone who needs binary-aware
+  grading writes one).
 
 ## Safety, permissions & hooks
 
@@ -497,7 +510,7 @@ Full PRD + as-built spec in `docs/multimodal-plan.md`. Two capabilities:
 
 ## HTTP API server (`agent_harness/api/`)
 
-`agent-harness serve [--host 127.0.0.1] [--port 8420] [--agents-dir agents]` — a second driver alongside `cli.py`, architecturally identical: both wire terminal I/O or HTTP/SSE to the same `prepare_runtime` callback functions. Lets remote clients (a separately-built chat UI, Reachy Mini, voice devices) run any agent by name, stream a turn's progress, and answer tool/domain/plan approval prompts, without a terminal. Full design/requirements background: `docs/api-plan.md`.
+`agent-harness serve [--host 127.0.0.1] [--port 8420] [--agents-dir agents]` — a second driver alongside `cli.py`, architecturally identical: both wire terminal I/O or HTTP/SSE to the same `prepare_runtime` callback functions. Lets remote clients (a separately-built chat UI, Reachy Mini, voice devices) run any agent by name, stream a turn's progress, and answer tool/domain/plan approval prompts, without a terminal. Full design/requirements background: `docs/roadmap.md`'s "HTTP API server" Done entry (the original PRD, `docs/api-plan.md`, was deleted 2026-08-30 once fully superseded by that entry).
 
 - **`GET /agents`** — lists available agent names (`config.py::list_agent_names`, scans `<agents_dir>/*/config.yaml`).
 - **`POST /agents/<name>/runs`** — starts one turn. Body: `{"message": str, "session_id"?: str, "session_name"?: str}`. Response is `text/event-stream` (Server-Sent Events), held open for the run's duration, plus an `X-Run-Id` header — the only place a client learns the run's id, needed to answer any approval it raises. Returns `404` for an unknown agent, `400` for a missing message, `409` if the target session already has a run in flight.
@@ -508,7 +521,7 @@ Full PRD + as-built spec in `docs/multimodal-plan.md`. Two capabilities:
 - **Session identity is GUID-first** (`session.py`, mirrors Claude Code's session model) — every session gets a GUID regardless of whether it's named; a name is optional/cosmetic, resolved via a directory scan, never the file's actual key. One active run per session, enforced (a second concurrent request against a session already in flight gets `409`) — `save_session` overwrites the whole file rather than appending, so without this a genuinely concurrent second writer could silently drop the first one's entire turn.
 - **Approval waits time out** (5 minutes, default-deny past that) rather than holding a session's lock forever if a client vanishes mid-approval.
 - **Auth: a single shared-secret header** (`X-API-Key`, checked via `secrets.compare_digest`), read from `AGENT_HARNESS_API_KEY`; server binds to `127.0.0.1` by default. **Trust boundary, stated plainly, not left implicit:** anyone holding a valid key can list, resume, and run *every* agent and *every* session — session access has no separate protection layer beyond the same secret that already grants everything else. Full auth (accounts, tokens, rotation) is deliberately not built — right-sized for the current LAN-only/single-machine deployment, not an oversight.
-- **Deliberately not built yet** (see `docs/api-plan.md` for the reasoning behind each): true suspend/resume of a dropped connection, agent create/delete/edit via the API (list/run only), websockets. (Real cancellation shipped 2026-08-23 — see "Cancellation" above.)
+- **Deliberately not built yet** (see `docs/roadmap.md`'s "HTTP API server" Done entry for the reasoning behind each): true suspend/resume of a dropped connection, agent create/delete/edit via the API (list/run only), websockets. (Real cancellation shipped 2026-08-23 — see "Cancellation" above.)
 - **Why Flask, not FastAPI**: FastAPI's real advantage is Pydantic-based request models plus free interactive docs — adopting it here would mean pulling in Pydantic for a project that avoids it unless necessary, in exchange for async-native performance this design deliberately doesn't use (thread-per-request, not asyncio, is the whole point). Flask's `stream_with_context` is the standard, singular way to stream a response; FastAPI's SSE story leans on a third-party package instead.
 
 ## Evaluation framework (`eval/`)

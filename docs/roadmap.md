@@ -143,7 +143,33 @@ Not part of the sequence: **API/async boundary** is a standing design constraint
 
 **Scope in roadmap terms:** sub-agent fan-out first, not parallel tool calls inside a single turn.
 
-**Deep-dive design:** `docs/streaming-plan.md`
+**Design (migrated from `docs/streaming-plan.md`, now deleted — folded in
+2026-08-30 since the doc's other parts were fully superseded and this was
+the only part still unbuilt):**
+
+- **`run_agents_parallel(tasks)` tool** — new tool next to `run_agent`.
+  Takes N `(agent_name, message)` pairs, runs via `ThreadPoolExecutor`,
+  returns results in order. Each sub-agent gets its own isolated context
+  (own message list, own budget, own memory scope). Additive — existing
+  `run_agent` stays; orchestrator agents opt in. Needs `_call_depth`
+  (`routing.py`) moved to a `contextvars.ContextVar` so threads don't
+  collide.
+- **Per-agent `RunContext`** (enables the above cleanly) — a dataclass
+  bundling call_depth, budget, memory_dir, tool_timeout, callbacks,
+  message list, agent_id; threaded through loops and tool calls, retiring
+  today's module globals.
+- **Orchestration patterns cheap to build once those two exist:**
+  parallel fan-out + adjudicator (N cheap local workers, one foundation
+  model picks — the main motivating case, e.g. column-matching/extraction/
+  classification), best-of-N (same prompt, different temperature/model,
+  scorer picks), race/first-wins (cheap + expensive model together, first
+  correct wins), map-reduce (split doc → N workers → reducer), parallel
+  debate (N answer simultaneously, judge picks), router (cheap classifier
+  picks a specialist). A dynamic planner+worker-pool variant is more
+  powerful and less predictable — defer until static fan-out validates.
+- **CLI output for parallel runs:** prefix each line with `[agent_id]` and
+  a colour — deliberately simple, no panes/curses. Push richer live-view
+  UX to a future UI layer, not the CLI.
 
 **Note (2026-08-15):** reaffirmed as deferred — Track B #2, same track as
 parallel tool-call execution (Track B #1, below/in the Scoped-out-of-MCP
@@ -152,7 +178,30 @@ backlog), separate from the interface-expansion track (shipped — see
 
 ### Evaluation framework (added 2026-04-16, shipped 2026-08-03)
 
-Run agents against test cases and score quality. Shipped as the `eval/` package — test case definitions, pluggable code + model graders with a gate/signal split, JSONL storage, and a ranked leaderboard. Replaces the ad hoc `scripts/run_experiment.py` pattern; `scripts/score_run.py`'s comparison logic was reused, not rewritten, as the `column_match` grader. Design doc: `docs/eval_framework.md`. Deferred: extending it to benchmark external coding assistants (Claude Code, Codex CLI, Copilot) via a `Subject` abstraction — captured in that doc, not built.
+Run agents against test cases and score quality. Shipped as the `eval/` package — test case definitions, pluggable code + model graders with a gate/signal split, JSONL storage, and a ranked leaderboard. Replaces the ad hoc `scripts/run_experiment.py` pattern; `scripts/score_run.py`'s comparison logic was reused, not rewritten, as the `column_match` grader. Full design rationale: `docs/features.md`'s "Evaluation framework" section.
+
+**Deferred idea, migrated from `docs/eval_framework.md` (deleted 2026-08-30,
+fully superseded except this) — testing external coding assistants:**
+extend `eval/` beyond `agent_harness` agents to benchmark the coding tools
+actually used day to day — Claude Code (`claude -p "prompt"
+--output-format json`, scriptable/structured), Codex CLI (`codex exec
+"prompt"`, scriptable/non-interactive), GitHub Copilot (a VS Code CLI
+entry point — `code chat "<prompt>"` plus ask/edit/agent mode flags,
+accepts piped stdin). The natural seam: a `Subject` protocol in
+`eval/runner.py` — today `run_case_once` hardcodes "load an `AgentConfig`,
+call `prepare_runtime`" as the only way to produce a `RunResult`; a
+`Subject` would be anything taking a prompt and returning
+`(response_text, output_file_content, cost/turns-if-available)`, so
+graders (which only ever look at `response_text`/`output_file_content`)
+wouldn't need to change. Not built — just don't design `runner.py` in a
+way that makes adding this later a rewrite. Revisit when there's an
+actual case to compare tool effectiveness, not before.
+
+**Other not-built items from the same doc:** regression detection (diff a
+run against a stored baseline, natural next step once the JSONL history
+has enough real runs to compare against); a `--gate-threshold` CLI flag
+(currently hardcoded to `1.0` — every gate grader must pass every run —
+at the `cli.py` call site rather than exposed).
 
 ### Lazy tool schema loading (added 2026-04-16)
 
@@ -225,7 +274,7 @@ events (not just the final `RunResult`), and the grader interface to accept
 a step/stage identifier. Extend the existing `eval/` package's structures
 rather than building a parallel system.
 
-**Deep-dive design:** none yet — extend `docs/eval_framework.md` when scoped.
+**Deep-dive design:** none yet — extend `docs/features.md`'s "Evaluation framework" section when scoped (the original design doc, `docs/eval_framework.md`, was deleted 2026-08-30).
 
 **Note (2026-08-13): delayed before being designed.** Started planning
 this first per the build order above, then realized mid-plan that the
@@ -261,10 +310,12 @@ flagged as the "genuinely major hassle" item during the RAG conversation,
 as distinct from the cheap CLI-image-display piece.
 
 **Superseded, shipped 2026-08-15:** requirements broadened from "images"
-to "images, documents, and general file input/output" and fully specced
-in `docs/multimodal-plan.md`, then built end to end. See "Multimodal
-file handling" in Done below for the summary. This entry stays for
-history; `docs/multimodal-plan.md` has the full PRD + spec.
+to "images, documents, and general file input/output," then built end to
+end. See "Multimodal file handling" in Done below for the summary, and
+`docs/features.md`'s "Multimodal / file handling" section for the full
+as-built mechanism (the original PRD, `docs/multimodal-plan.md`, was
+deleted 2026-08-30 once fully superseded by that section). This entry
+stays for history.
 
 ### Budget-verification tooling + agent_budgets (added 2026-08-06, shipped 2026-08-06)
 
@@ -559,7 +610,7 @@ Possible directions, none decided:
   `eval_optimize.py`'s numeric `SCORE: N/10` is a small step in this
   direction already, but it's still self-reported, not verified.
 - Conceptual overlap with the eval framework's grader split
-  (`docs/eval_framework.md`) — the critique step is essentially an ad hoc
+  (`docs/features.md`'s "Evaluation framework" section) — the critique step is essentially an ad hoc
   model grader with no gate/signal distinction and no code-grader option.
   Worth asking whether reflection's critique phase could borrow that
   concept rather than reinventing verification twice.
@@ -888,7 +939,7 @@ The react loop now injects a "You have N turn(s) remaining[, Estimated $X remain
 
 ### CLI streaming (added 2026-04-16, resolved by the "Streaming" commit `61d32d3`)
 
-Found stale while reviewing "Plausible Future Capabilities" (2026-08-10) — this had already fully shipped and was never moved out. `--stream`/`--no-stream` CLI flags, `display.py::show_delta`/`show_thinking_delta`, `on_delta`/`on_thinking_delta` callback wiring through `runtime.py`/`loops/react.py`, valid for `anthropic` and `openai` (Responses API models only, rejected for Chat Completions/`base_url` backends at the provider boundary and in `validate_config`). Deep-dive design remains at `docs/streaming-plan.md` for reference.
+Found stale while reviewing "Plausible Future Capabilities" (2026-08-10) — this had already fully shipped and was never moved out. `--stream`/`--no-stream` CLI flags, `display.py::show_delta`/`show_thinking_delta`, `on_delta`/`on_thinking_delta` callback wiring through `runtime.py`/`loops/react.py`, valid for `anthropic` and `openai` (Responses API models only, rejected for Chat Completions/`base_url` backends at the provider boundary and in `validate_config`). As-built mechanism: `docs/features.md`'s "Providers & model access" section (the original design doc, `docs/streaming-plan.md`, was deleted 2026-08-30 once fully superseded — its still-unbuilt parallel-agent design is now under "Parallel sub-agent fan-out" above).
 
 ### Plan critique + human-in-the-loop refinement (added 2026-08-06, resolved 2026-08-10)
 
@@ -914,7 +965,7 @@ Verified live against the real reference `@modelcontextprotocol/server-filesyste
 
 ### Multimodal file handling (added 2026-08-06 as "Image handling", broadened and resolved 2026-08-15)
 
-Agents can now genuinely see images and PDFs, and tools can hand back freshly-generated binary content — full requirements/PRD in `docs/multimodal-plan.md`, this entry is the shipped summary. Two capabilities: (A) new built-in tools `view_image(path)`/`view_document(path)` attach a real vision/document content block to the *next* message, not just a text description; (B) any tool can embed base64+filename in its ordinary string output (`attachments.py::wrap_binary_output`) and the harness detects, decodes, guardrails, and saves it, replacing the envelope with a short text reference before it ever enters history or the CLI display.
+Agents can now genuinely see images and PDFs, and tools can hand back freshly-generated binary content — full mechanism in `docs/features.md`'s "Multimodal / file handling" section (the original PRD, `docs/multimodal-plan.md`, was deleted 2026-08-30 once fully superseded), this entry is the shipped summary. Two capabilities: (A) new built-in tools `view_image(path)`/`view_document(path)` attach a real vision/document content block to the *next* message, not just a text description; (B) any tool can embed base64+filename in its ordinary string output (`attachments.py::wrap_binary_output`) and the harness detects, decodes, guardrails, and saves it, replacing the envelope with a short text reference before it ever enters history or the CLI display.
 
 **Architecture decision, validated by a Plan agent re-reading every touched file:** `ToolResult` gets one new field, `attachment: Attachment | None` — `tool_registry: dict[str, Callable[..., str]]` stays completely untouched, every tool (built-in/custom/MCP) still just returns `str`. Verified both OpenAI translation paths (Chat Completions and Responses) are string-only for tool output, so an attachment becomes a **separate synthetic message following the tool result** on all three translation functions (Anthropic + 2×OpenAI) — uniform, not relying on an unverified Anthropic-specific nested-content quirk. `view_image`/`view_document` are matched by **function identity, not name** in `execute_tool`, closing an edge case where an MCP server exposing its own same-named tool could otherwise get misattributed.
 
@@ -956,7 +1007,7 @@ Verified: `pytest tests/unit -q` → 684 passed (up from 644); ruff clean; `mypy
 
 ### HTTP API server (added 2026-08-15 as two items — "Permission/approval UX for no-terminal contexts" and "API / async boundary" — merged and resolved 2026-08-22)
 
-Full requirements/architecture discussion first (`docs/api-plan.md`), since the two parent roadmap items turned out tightly coupled — designing the approval mechanism without first picking the transport shape would have meant redesigning it once the transport was chosen. Real driving clients established through that discussion: a separately-built web chat UI (not part of this repo), eventually Reachy Mini (voice, own STT/TTS), possibly an Echo-via-AWS-Lambda proxy "one day."
+Full requirements/architecture discussion first (`docs/api-plan.md`, deleted 2026-08-30 once fully superseded by this entry — the one still-open nugget it carried is folded in below), since the two parent roadmap items turned out tightly coupled — designing the approval mechanism without first picking the transport shape would have meant redesigning it once the transport was chosen. Real driving clients established through that discussion: a separately-built web chat UI (not part of this repo), eventually Reachy Mini (voice, own STT/TTS), possibly an Echo-via-AWS-Lambda proxy "one day."
 
 **Transport:** one HTTP request per agent turn ("run"), held open, response streamed as Server-Sent Events. Client→server stays ordinary short requests: start a run, and a generic signal endpoint (`POST /runs/<run_id>/signal`, `{"approval_id", "decision"}`) for anything that needs to reach into an in-progress run — deliberately generic, not approval-specific, so real cancellation (deferred, see below) can reuse it later without a redesign. Thread-per-request, not asyncio — each held-open SSE connection is one thread blocked on I/O, genuinely idle not CPU-bound, and the real client count (a handful of devices) is nowhere near where that stops being fine. **Flask chosen over FastAPI**: FastAPI's real draw (Pydantic models, free interactive docs) means adopting Pydantic for a project that avoids it unless necessary, for a benefit (async-native performance) this design deliberately doesn't use; Flask's `stream_with_context` is the standard, singular SSE recipe, FastAPI's isn't.
 
@@ -970,11 +1021,13 @@ Full requirements/architecture discussion first (`docs/api-plan.md`), since the 
 
 **Approval waits time out** (5 minutes, default-deny on expiry) — a run blocked on an approval that never arrives releases its session lock instead of holding it forever, the same fail-safe instinct as the `EOFError` fix folded into this build (`_permission_prompt`/`_domain_prompt`/`_plan_prompt` now catch `EOFError` from non-interactive stdin and default-deny instead of crashing raw). `permissions.py::Permissions.save()` also swapped to `atomic_write_text` — a real gap the concurrency-safety work above had missed, same class of per-agent-dir race, folded in here since it was found while grounding this build in the real code.
 
-**Explicitly scoped out, not forgotten** (all captured in `docs/api-plan.md`): real cancellation execution (the signal endpoint's shape deliberately didn't preclude it — reused as-is, unchanged, when it was built; see "Real cancellation ('stop')" below, shipped 2026-08-23); true suspend/resume of a run; full auth (accounts/tokens/OAuth) beyond the existing shared-secret header; agent create/delete/edit via the API (list/run only); websockets; reconnect gap-recovery.
+**Explicitly scoped out, not forgotten:** real cancellation execution (the signal endpoint's shape deliberately didn't preclude it — reused as-is, unchanged, when it was built; see "Real cancellation ('stop')" below, shipped 2026-08-23); true suspend/resume of a run — rejected outright, not deferred, no evidence the held-open-connection model doesn't already cover the actual requirement; full auth (accounts/tokens/OAuth) beyond the existing shared-secret header; agent create/delete/edit via the API (list/run only) — split deliberately from list/run because a config can grant shell/code-execution tool access, so remote config-writing is a meaningfully higher-risk surface than using an already-approved agent, and needs its own auth thinking when there's a real driver; websockets — rejected, not deferred, revisit only if a genuine low-latency client→server push need emerges; reconnect gap-recovery (a dropped connection doesn't currently recover missed events on reconnect — accepted gap, consistent with not building true suspend/resume).
+
+**Note for whoever builds the browser-based chat UI (still a separate future repo, not started):** a plain browser using the native `EventSource` API only supports GET and can't set custom headers, so it can't carry the shared-secret `X-API-Key` header this design assumes. Two options, undecided: send the secret as a query parameter (simple, but it leaks into server logs/browser history) or use a fetch-based SSE client instead of native `EventSource` (more client-side code, keeps the header approach). Flagged here so it isn't rediscovered as a surprise; not relevant to `chat/cli.py`/`chat/app.py`, which are Python clients and don't hit this.
 
 **Documented, not built:** any caller holding the shared secret can list/resume/run every agent and session — the same trust boundary the secret already grants for everything else, not a separate protection layer for sessions specifically. Must be stated plainly in `README.md`/`docs/features.md` — done as part of this same pass.
 
-Verified: `pytest tests/unit -q` → 762 passed (up from 684); ruff clean; `mypy --strict` clean (107 files); `radon cc --min D` → none. Real, zero-mock, end-to-end integration tests (`tests/integration/test_api_server.py`) against a real Flask app on a real socket (`werkzeug.serving.make_server`, real `httpx` client): a genuine SSE run against the live Anthropic API streaming real `delta`/`done` events; the concrete concurrency proof (two real barrier-adjacent threads racing a `POST` against the same session name — exactly one `200` and one `409`, on-disk session file has exactly one new turn, not silently dropped); a real approval round trip (two separate live connections — one blocked mid-run on `registry.await_signal`, a second answers it, the first then reaches `done`, not the timeout-driven default-deny path); real auth rejection. `docs/roadmap.md` Priority Order collapsed (Track A shipped; Track B renumbered to #1/#2), `docs/api-plan.md` status updated, `docs/features.md`/`README.md` updated with the new `serve` subcommand and the shared-secret trust-boundary statement.
+Verified: `pytest tests/unit -q` → 762 passed (up from 684); ruff clean; `mypy --strict` clean (107 files); `radon cc --min D` → none. Real, zero-mock, end-to-end integration tests (`tests/integration/test_api_server.py`) against a real Flask app on a real socket (`werkzeug.serving.make_server`, real `httpx` client): a genuine SSE run against the live Anthropic API streaming real `delta`/`done` events; the concrete concurrency proof (two real barrier-adjacent threads racing a `POST` against the same session name — exactly one `200` and one `409`, on-disk session file has exactly one new turn, not silently dropped); a real approval round trip (two separate live connections — one blocked mid-run on `registry.await_signal`, a second answers it, the first then reaches `done`, not the timeout-driven default-deny path); real auth rejection. `docs/roadmap.md` Priority Order collapsed (Track A shipped; Track B renumbered to #1/#2), `docs/features.md`/`README.md` updated with the new `serve` subcommand and the shared-secret trust-boundary statement.
 
 **Same-day fix from real usage, not a code review catch (2026-08-22):** hit live within minutes of shipping — a config.yaml typo (`stream:true`, no space) raised `yaml.YAMLError` inside `config_loader.load()`, which `_handle_start_run` only caught as `FileNotFoundError`, so it leaked a raw, message-free Werkzeug 500 HTML page. Worse, found while fixing that: `_run_worker` only wrapped `run_messages()` in `except RuntimeError` — any exception earlier in the function (`prepare_runtime` itself failing config validation, e.g.) went completely uncaught in the background thread, silently hanging the client on heartbeats forever with the session's exclusivity lock stuck busy permanently, since `_sse_stream` only calls `end_run()` after seeing a `done`/`error` event that would now never arrive. Fixed: `_handle_start_run` catches any config-load exception and returns a clean `400` with the real message; `_run_worker` split into a thin outer wrapper (catches anything, logs the full traceback via `logger.exception`, guarantees an `error` event always reaches the client) around the existing `_execute_run` logic. Also: `serve()` now calls `setup_logging()` (new `--verbose` flag) so the terminal running `agent-harness serve` shows properly formatted logs instead of relying on Python's bare fallback handler — a real "I can see no logs" gap raised directly by live use, not anticipated in the original design. Verified against the exact original failure (temporarily reintroduced the same YAML typo against the live running server, confirmed a clean JSON error and a visible traceback in the log, restored the fix) and with two new tests (`TestWorkerFailureSafety`, using `tests/data/invalid_agent_bad_provider` to trigger a real `prepare_runtime`-time failure) proving the session lock releases correctly. `pytest tests/unit -q` → 765 passed; ruff/mypy/radon unchanged, still clean.
 

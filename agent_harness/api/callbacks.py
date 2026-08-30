@@ -19,7 +19,7 @@ from agent_harness.api.registry import RunRegistry
 from agent_harness.permissions import PermissionDecision
 from agent_harness.types import OutputSink, ToolCall, ToolResult
 
-APPROVAL_TIMEOUT_SECONDS = 300.0  # default-deny past this — see docs/api-plan.md
+APPROVAL_TIMEOUT_SECONDS = 300.0  # default-deny past this — see docs/roadmap.md's "HTTP API server" entry
 
 
 class SeqCounter:

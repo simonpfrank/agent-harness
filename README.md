@@ -407,7 +407,7 @@ Response is a held-open `text/event-stream`: `delta`/`thinking_delta` chunks as 
 
 Sessions get a GUID identity under the hood (mirrors Claude Code's session model) — a `session_name` you pass is just a label resolved on lookup, never the file's real key, so two different callers can never collide on an unqualified name. Only one run at a time is allowed per session; a second concurrent request against the same session gets `409` rather than silently racing.
 
-Full design background and what's still deliberately deferred (full auth, agent management via the API, websockets, killing a tool call already in flight): `docs/api-plan.md`. Real mid-run cancellation itself has since shipped — see that doc's item 6 and `docs/roadmap.md`'s "Real cancellation" Done entry.
+Full design background and what's still deliberately deferred (full auth, agent management via the API, websockets, killing a tool call already in flight): `docs/roadmap.md`'s "HTTP API server" Done entry (the original PRD, `docs/api-plan.md`, was deleted 2026-08-30 once fully superseded). Real mid-run cancellation itself has since shipped — see that same entry and the "Real cancellation" Done entry beside it.
 
 ## Verified Completion
 
@@ -439,7 +439,7 @@ tools: [read_file, execute_code, view_image, view_document]
 python -m agent_harness run ./agents/hello "Run execute_code to make a chart, then view_image it and tell me if it looks right"
 ```
 
-`view_image(path)` / `view_document(path)` attach the file as a real vision/document API content block on the agent's next message. A tool that generates binary content in-process (not already written to disk) can hand it back the same way other tools return values — see `docs/multimodal-plan.md` for the full mechanism. Only the most recently viewed attachment stays in what's actually sent to the model on later turns (keeps token cost and context usage down); nothing is lost from the persisted conversation history.
+`view_image(path)` / `view_document(path)` attach the file as a real vision/document API content block on the agent's next message. A tool that generates binary content in-process (not already written to disk) can hand it back the same way other tools return values — see `docs/features.md`'s "Multimodal / file handling" section for the full mechanism. Only the most recently viewed attachment stays in what's actually sent to the model on later turns (keeps token cost and context usage down); nothing is lost from the persisted conversation history.
 
 Provider/model support isn't pre-validated — if a model or backend can't handle what you're sending, the provider rejects it with a clear error rather than the harness guessing ahead of time.
 

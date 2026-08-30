@@ -137,9 +137,12 @@ dependency in `display.py`) behind two failsafes: file-existence check, and
 `console.is_terminal` (skip entirely for non-interactive output). Small,
 self-contained, doesn't block anything above — see conversation log
 2026-08-03 for the full reasoning. The better long-term home for viewing
-retrieved images is a browser-based chat client via the future API layer
-(`docs/streaming-plan.md` Part 4) — already noted there as a motivating use
-case, not a reason to build the API layer now.
+retrieved images is a browser-based chat client via the (now-shipped) HTTP
+API — "here's a retrieved image" is just another SSE event type a browser
+client renders properly, no terminal-capability guessing or block-art
+fidelity ceiling; the CLI keeps `rich-pixels` as its cheap fallback either
+way. Not a reason to build a browser client now — just a data point for
+when one exists.
 
 ## Adjacent idea — vector db for agent memory (not a commitment)
 

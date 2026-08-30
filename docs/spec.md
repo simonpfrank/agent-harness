@@ -506,6 +506,21 @@ Each is a folder with `instructions.md`, `config.yaml`, and optionally `tools.md
 
 ## File summary (actual, post-implementation)
 
+**Stale, frozen at the Phase 1-5 build (through roughly 2026-08-06) — not
+re-verified since.** Everything shipped after that (MCP client support,
+multimodal/attachments, the HTTP API server, cancellation, model-registry
+consolidation, atomic writes) added whole files this table doesn't list —
+`mcp_client.py`, `attachments.py`, `atomic_write.py`, `models.py`, the
+entire `agent_harness/api/` subpackage. Checked 2026-08-30: real count is
+43 files / 6,424 lines (`find agent_harness -name "*.py" | xargs wc -l`)
+and 820 unit tests (`pytest tests/unit -q --collect-only`), not the 34
+files / ~3,000 lines / 292 tests below. Deliberately not hand-patched to
+match — a second hand-maintained table that silently drifts from reality
+is exactly the `COST_TABLE`/o4-mini failure shape this project already
+hit once (see `docs/features.md`'s cost-tracking section). Kept below as
+a historical snapshot of the original build, not a current inventory —
+run the two commands above for the real numbers.
+
 | File | Phase | Lines | Purpose |
 |------|-------|-------|---------|
 | `types.py` | 1 | 92 | Shared dataclasses and type aliases |

@@ -2,7 +2,8 @@
 
 Test clients for trying the HTTP API interactively — not the production
 chat UI the roadmap describes as its own separate project (see
-`docs/api-plan.md`). Two of them, for two different jobs:
+`docs/roadmap.md`'s "HTTP API server" Done entry). Two of them, for two
+different jobs:
 
 - **`cli.py`** — plain terminal, no web layer. Prints the raw SSE event
   stream live with a timestamp on the left and a clear label per event
