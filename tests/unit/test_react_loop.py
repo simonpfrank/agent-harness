@@ -122,6 +122,19 @@ class TestCancellation:
         assert result == ""
         chat_fn.assert_not_called()
 
+    def test_cancelled_before_first_call_removes_the_dangling_prompt(self) -> None:
+        """The caller (`runtime.run_messages`) mutates `messages` in place and the
+        same list gets persisted as session history — leaving the unanswered
+        prompt in place would mean the *next* real request's prompt lands right
+        after it with no assistant reply in between, and a real live test showed
+        the model then answers both together. Cancelling should leave history
+        exactly as if this turn never happened."""
+        chat_fn = MagicMock(return_value=_response("should never be reached"))
+        cb = LoopCallbacks(is_cancelled=lambda: True)
+        messages = [Message(role="system", content="sys"), Message(role="user", content="do the thing")]
+        run(chat_fn, messages, [], _config(), callbacks=cb)
+        assert messages == [Message(role="system", content="sys")]
+
 
 class TestRunMaxTurns:
     def test_stops_at_max_turns(self) -> None:

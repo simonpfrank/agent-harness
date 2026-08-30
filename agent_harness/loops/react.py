@@ -171,5 +171,12 @@ def run(
 
     last = messages[-1] if messages else None
     if last is None or last.role != "assistant":
-        return ""  # Cancelled before the first chat_fn call — nothing generated yet.
+        # Cancelled before the first chat_fn call — nothing generated yet. `messages`
+        # is mutated in place and the same list becomes persisted session history, so
+        # the dangling, unanswered prompt must come back out: left in place, the next
+        # real request's prompt would land right after it with no assistant reply in
+        # between — confirmed live, the model then answered both together.
+        if last is not None and last.role == "user":
+            messages.pop()
+        return ""
     return last.content or ""
