@@ -6,6 +6,7 @@ import importlib.util
 import inspect
 import logging
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -17,10 +18,13 @@ from typing import Any, get_type_hints
 
 import anthropic
 import httpx
+import lxml.etree
+import lxml.html
 import openai
 import trafilatura
 
 from agent_harness.attachments import build_attachment_from_file, extract_and_save_binary_output
+from agent_harness.mcp_client import McpManager
 from agent_harness.memory import list_memories as list_memories_for_dir
 from agent_harness.memory import recall_memory as recall_memory_for_dir
 from agent_harness.memory import save_memory as save_memory_for_dir
@@ -49,6 +53,7 @@ class ToolRuntimeContext:
     memory_dir: str = "memory"
     tool_timeout: int = _DEFAULT_TIMEOUT
     executor: str = _DEFAULT_EXECUTOR
+    mcp_manager: McpManager | None = None
 
 
 def _parse_arg_descriptions(docstring: str) -> dict[str, str]:
@@ -224,6 +229,73 @@ def edit_file(path: str, old_string: str, new_string: str) -> str:
     return f"Edited {path}"
 
 
+_ZERO_WIDTH_CHARS = "​‌‍﻿"
+_HIDDEN_STYLE_PATTERN = re.compile(
+    r"display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0(?:\.0+)?\b", re.IGNORECASE,
+)
+
+
+def _strip_hidden_content(html: str) -> str:
+    """Remove content hidden from human view before it reaches the model.
+
+    Real 2026 indirect-prompt-injection payloads rely on text a human can't
+    see but a scraper/agent will read — CSS-hidden elements
+    (`display:none`, `visibility:hidden`, `opacity:0`, the `hidden`
+    attribute) and zero-width Unicode characters. This is structural
+    pattern-matching, not an NLP classifier: the hiding technique itself
+    has to exist for the attack to work at all, which is what makes it a
+    tractable, targeted signal rather than a guess at intent.
+
+    Args:
+        html: Raw HTML to sanitize.
+
+    Returns:
+        HTML with hidden elements removed and zero-width characters
+        stripped. Falls back to the input unchanged if it can't be parsed
+        as HTML (e.g. empty or whitespace-only input).
+    """
+    for char in _ZERO_WIDTH_CHARS:
+        html = html.replace(char, "")
+    try:
+        tree = lxml.html.fromstring(html)
+    except lxml.etree.ParserError:
+        return html
+    to_remove = [
+        element
+        for element in tree.iter()
+        if element.get("hidden") is not None or _HIDDEN_STYLE_PATTERN.search(element.get("style") or "")
+    ]
+    for element in to_remove:
+        parent = element.getparent()
+        if parent is not None:
+            parent.remove(element)
+    result: str = lxml.html.tostring(tree, encoding="unicode")
+    return result
+
+
+def _extract_readable_content(html: str) -> str:
+    """Extract main readable content from HTML, discarding nav/ads/boilerplate.
+
+    Shared by `web_fetch` (a fresh HTTP response) and `read_live_page_content`
+    (the live DOM of an already-open browser page) — same noise-removal
+    pipeline regardless of where the HTML came from.
+
+    Content hidden from human view (CSS `display:none`/`visibility:hidden`/
+    `opacity:0`, the `hidden` attribute, zero-width Unicode characters) is
+    stripped before extraction — see `_strip_hidden_content` for why.
+
+    Args:
+        html: Raw HTML to extract from.
+
+    Returns:
+        Extracted content as markdown, or the raw HTML as a fallback if
+        trafilatura can't identify substantial content.
+    """
+    sanitized = _strip_hidden_content(html)
+    extracted = trafilatura.extract(sanitized, output_format="markdown")
+    return extracted if extracted is not None else html
+
+
 def web_fetch(url: str) -> str:
     """Fetch a URL and extract its main readable content.
 
@@ -243,8 +315,7 @@ def web_fetch(url: str) -> str:
     """
     response = httpx.get(url, timeout=30, follow_redirects=True)
     response.raise_for_status()
-    extracted = trafilatura.extract(response.text, output_format="markdown")
-    return extracted if extracted is not None else response.text
+    return _extract_readable_content(response.text)
 
 
 def web_search(query: str) -> str:
@@ -434,6 +505,17 @@ def build_tool_registry(context: ToolRuntimeContext | None = None) -> dict[str, 
     def list_memories_tool() -> str:
         return list_memories_for_dir(ctx.memory_dir)
 
+    def read_live_page_content_tool() -> str:
+        if ctx.mcp_manager is None:
+            raise RuntimeError(
+                "read_live_page_content requires a browser MCP server (e.g. @playwright/mcp, "
+                "named 'playwright') configured in this agent's mcp_servers"
+            )
+        html = ctx.mcp_manager.call_tool(
+            "playwright", "browser_evaluate", {"function": "() => document.documentElement.outerHTML"},
+        )
+        return _extract_readable_content(html)
+
     run_command_tool.__name__ = "run_command"
     run_command_tool.__doc__ = run_command.__doc__
     execute_code_tool.__name__ = "execute_code"
@@ -453,6 +535,18 @@ def build_tool_registry(context: ToolRuntimeContext | None = None) -> dict[str, 
     )
     list_memories_tool.__name__ = "list_memories"
     list_memories_tool.__doc__ = "List all saved memory keys."
+    read_live_page_content_tool.__name__ = "read_live_page_content"
+    read_live_page_content_tool.__doc__ = (
+        "Read the main readable content of the currently open browser page.\n\n"
+        "Use this after browser_navigate/browser_click has loaded the page you want to "
+        "read (e.g. a news article) — it extracts the live, JS-rendered DOM through the "
+        "same noise-removal trafilatura uses for web_fetch, so it works on pages web_fetch "
+        "can't (client-rendered single-page apps).\n\n"
+        "Returns:\n"
+        "    Extracted content as markdown, or raw HTML as a fallback.\n\n"
+        "Raises:\n"
+        "    RuntimeError: If no browser MCP server is configured for this agent.\n"
+    )
 
     return {
         "run_command": run_command_tool,
@@ -472,6 +566,7 @@ def build_tool_registry(context: ToolRuntimeContext | None = None) -> dict[str, 
         "recall_memory": recall_memory_tool,
         "list_memories": list_memories_tool,
         "run_agent": _run_agent_tool,
+        "read_live_page_content": read_live_page_content_tool,
     }
 
 

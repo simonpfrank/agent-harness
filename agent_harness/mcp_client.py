@@ -34,6 +34,7 @@ class McpServerSpec:
     command: str
     args: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
+    tools: list[str] | None = None
 
 
 class McpManager:

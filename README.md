@@ -9,7 +9,8 @@ As a summary, be able to run an agent in a cli, and if it needs more inputs just
 - **Agent = folder** — `instructions.md` + `config.yaml` + optional `tools.md`. Copy it, share it, version it.
 - **7 loop patterns** — ReAct, Plan-and-Execute (with a plan critique/refine round and an optional human-approval gate), ReWOO, Reflection, Evaluator-Optimizer, Ralph Wiggum, Debate
 - **2 providers** — Anthropic (Claude) and OpenAI/LM Studio, with shared retry logic. Add your own in one file.
-- **MCP client support** — consume external MCP servers (stdio) as tools, auto-discovered, alongside your own built-in/custom tools
+- **MCP client support** — consume external MCP servers (stdio) as tools, auto-discovered, alongside your own built-in/custom tools; a server can optionally declare a `tools:` allow-list to expose only some of what it offers
+- **Browser automation** — accessibility-tree-based (not screenshots) via Microsoft's `@playwright/mcp`, with domain-approval gating that catches off-domain link clicks and redirects, not just explicit navigation; ephemeral browser profile by default, real profile as an explicit opt-in. See `agents/browser-assistant/`.
 - **Vision and document support** — `view_image`/`view_document` tools let an agent genuinely see an image or PDF it has a path to; tools can hand back freshly-generated binary content too
 - **Core built-in tools** — file read/write/edit, shell commands, code execution, web fetch/search, live vendor model listing, vision/document viewing, plus memory/routing tools (see [Built-in Tools](#built-in-tools) below for the full list)
 - **5 safety hooks on by default** — dangerous command blocking, path traversal, network exfiltration, injection scanning, secrets redaction
@@ -271,6 +272,7 @@ agents/my-agent/
 | `orchestrator` | react | Routes tasks to specialist agents |
 | `hello-local` | react | Same as hello but uses LM Studio |
 | `agent_budgets` | react | Dogfooding demo — verifies the harness's own model cost table against real vendor pricing, proposes fixes for human review (never applies them itself) |
+| `browser-assistant` | react | Navigates and reads real web pages via `@playwright/mcp` — accessibility-tree based, ephemeral browser by default, domain-approval gated. Read/navigate only in v1, no form-filling. |
 
 ```bash
 # Count letters with code (the strawberry test)
@@ -367,8 +369,9 @@ or `--show-thinking` / `--no-show-thinking` per run.
 - `web_search(query)` — Tavily-based web search (`TAVILY_API_KEY` required)
 - `list_provider_models(provider)` — query the vendor's live model list directly, not any of the harness's internal tables
 - `view_image(path)` / `view_document(path)` — let the agent genuinely see an image or PDF (real vision/document content block), not just read its path. See [Vision and Documents](#vision-and-documents) below.
+- `read_live_page_content` — read the currently open browser page's main content, extracted the same way `web_fetch` does but from a live, JS-rendered page. Requires an `mcp_servers` entry named `playwright` (see `agents/browser-assistant/`).
 
-`edit_file`/`web_fetch`/`web_search`/`list_provider_models` are gated by the network-exfiltration/permission hooks the same way `run_command` is.
+`edit_file`/`web_fetch`/`web_search`/`list_provider_models`/`read_live_page_content`'s `browser_navigate` counterpart are gated by the network-exfiltration/permission hooks the same way `run_command` is.
 
 ## MCP Client Support
 
@@ -382,6 +385,18 @@ mcp_servers:
 ```
 
 Every tool the server exposes gets merged into the agent's tool list automatically — no need to hand-enumerate them in `tools:`. If a tool name collides with one this agent already exposes (built-in or custom), the harness's own version wins; anything not already claimed comes from MCP. Add a name to `tools:` at any time to "claim" it for the harness's own implementation instead — no MCP config change needed.
+
+To expose only some of a server's tools rather than everything it offers, add an optional `tools:` list to that server's entry:
+
+```yaml
+mcp_servers:
+  - name: playwright
+    command: npx
+    args: ["@playwright/mcp@latest", "--isolated"]
+    tools: [browser_navigate, browser_click, browser_snapshot]
+```
+
+Without this list, a server's tools are still all merged in unchanged (the original, still-default behavior). See `agents/browser-assistant/config.yaml` for a real example — it deliberately keeps riskier tools like `browser_type`/`browser_evaluate` off this list rather than exposing everything `@playwright/mcp` offers.
 
 stdio (local subprocess) transport only for now — see `docs/roadmap.md` for what's deliberately not built yet (remote HTTP/SSE servers, MCP server mode).
 

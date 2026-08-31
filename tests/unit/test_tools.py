@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 from agent_harness.attachments import wrap_binary_output
 from agent_harness.tools import (
     ToolRuntimeContext,
+    _strip_hidden_content,
     build_tool_registry,
     edit_file,
     execute_code,
@@ -261,6 +262,54 @@ class TestEditFile:
         assert "edit_file" in registry
 
 
+class TestStripHiddenContent:
+    """Structural pattern-matching against real 2026 indirect-prompt-injection
+    techniques: content has to be invisible to a human to work as an attack
+    (CSS-hidden elements, zero-width Unicode), which makes the hiding
+    technique itself a detectable, targeted signal — not an NLP classifier."""
+
+    def test_removes_display_none_element(self) -> None:
+        html = '<div><p>Visible</p><p style="display:none">Secret instructions</p></div>'
+        result = _strip_hidden_content(html)
+        assert "Visible" in result
+        assert "Secret instructions" not in result
+
+    def test_removes_visibility_hidden_element(self) -> None:
+        html = '<div><p>Visible</p><span style="visibility: hidden">Hidden text</span></div>'
+        result = _strip_hidden_content(html)
+        assert "Hidden text" not in result
+
+    def test_removes_opacity_zero_element(self) -> None:
+        html = '<div><p>Visible</p><p style="opacity:0">Invisible text</p></div>'
+        result = _strip_hidden_content(html)
+        assert "Invisible text" not in result
+
+    def test_removes_hidden_attribute_element(self) -> None:
+        html = '<div><p>Visible</p><p hidden>Hidden by attribute</p></div>'
+        result = _strip_hidden_content(html)
+        assert "Hidden by attribute" not in result
+
+    def test_strips_zero_width_characters_from_visible_text(self) -> None:
+        html = "<p>Vis​ible‌ text‍ here﻿</p>"
+        result = _strip_hidden_content(html)
+        assert "​" not in result
+        assert "‌" not in result
+        assert "‍" not in result
+        assert "﻿" not in result
+        assert "Visible text here" in result
+
+    def test_ordinary_visible_content_passes_through_unchanged(self) -> None:
+        html = "<div><p>Just an ordinary paragraph.</p></div>"
+        result = _strip_hidden_content(html)
+        assert "Just an ordinary paragraph." in result
+
+    def test_empty_input_falls_back_to_unchanged(self) -> None:
+        assert _strip_hidden_content("") == ""
+
+    def test_whitespace_only_input_falls_back_to_unchanged(self) -> None:
+        assert _strip_hidden_content("   ") == "   "
+
+
 class TestWebFetch:
     @patch("agent_harness.tools.trafilatura.extract")
     @patch("agent_harness.tools.httpx.get")
@@ -308,6 +357,44 @@ class TestWebFetch:
 
     def test_registered(self) -> None:
         assert "web_fetch" in registry
+
+
+class TestReadLivePageContent:
+    def test_raises_when_no_mcp_manager_configured(self) -> None:
+        import pytest
+
+        tool_registry = build_tool_registry(ToolRuntimeContext(mcp_manager=None))
+        with pytest.raises(RuntimeError, match="mcp_servers"):
+            tool_registry["read_live_page_content"]()
+
+    @patch("agent_harness.tools.trafilatura.extract")
+    def test_extracts_content_from_live_dom_via_mcp_manager(self, mock_extract: MagicMock) -> None:
+        mock_manager = MagicMock()
+        mock_manager.call_tool.return_value = "<html><body><p>The real content</p></body></html>"
+        mock_extract.return_value = "The real content"
+
+        tool_registry = build_tool_registry(ToolRuntimeContext(mcp_manager=mock_manager))
+        result = tool_registry["read_live_page_content"]()
+
+        assert result == "The real content"
+        mock_manager.call_tool.assert_called_once_with(
+            "playwright", "browser_evaluate", {"function": "() => document.documentElement.outerHTML"},
+        )
+        mock_extract.assert_called_once_with(mock_manager.call_tool.return_value, output_format="markdown")
+
+    @patch("agent_harness.tools.trafilatura.extract")
+    def test_falls_back_to_raw_html_when_extraction_fails(self, mock_extract: MagicMock) -> None:
+        mock_manager = MagicMock()
+        mock_manager.call_tool.return_value = "short page"
+        mock_extract.return_value = None
+
+        tool_registry = build_tool_registry(ToolRuntimeContext(mcp_manager=mock_manager))
+        result = tool_registry["read_live_page_content"]()
+
+        assert result == "short page"
+
+    def test_registered(self) -> None:
+        assert "read_live_page_content" in build_tool_registry(ToolRuntimeContext())
 
 
 class TestListProviderModels:

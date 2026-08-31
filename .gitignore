@@ -16,6 +16,7 @@ htmlcov/
 **/tmp/
 **/.allowed_domains.yaml
 **/.permissions.yaml
+**/.playwright-mcp/
 docs/research/
 /data/
 tests/data/agent_completion_check_real/counter.txt

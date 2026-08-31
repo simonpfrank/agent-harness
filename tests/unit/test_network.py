@@ -3,12 +3,38 @@
 import threading
 import time
 
-from agent_harness.network import make_network_blocker
+from agent_harness.network import _has_network_intent, make_network_blocker
 from agent_harness.types import ToolCall
 
 
 def _fetch(url: str) -> ToolCall:
     return ToolCall(id="tc", name="web_fetch", arguments={"url": url})
+
+
+class TestHasNetworkIntent:
+    """Per-tool-name dispatch in _has_network_intent — no test existed for
+    this directly before (only the end-to-end make_network_blocker test
+    below), so covering the existing branches alongside the new one."""
+
+    def test_web_fetch_returns_its_url(self) -> None:
+        call = ToolCall(id="tc", name="web_fetch", arguments={"url": "https://example.com/x"})
+        assert _has_network_intent(call) == (True, "https://example.com/x")
+
+    def test_run_command_without_network_pattern_is_not_network(self) -> None:
+        call = ToolCall(id="tc", name="run_command", arguments={"command": "ls -la"})
+        assert _has_network_intent(call) == (False, "")
+
+    def test_unknown_tool_is_not_network(self) -> None:
+        call = ToolCall(id="tc", name="read_file", arguments={"path": "x.txt"})
+        assert _has_network_intent(call) == (False, "")
+
+    def test_browser_navigate_returns_its_url(self) -> None:
+        call = ToolCall(id="tc", name="browser_navigate", arguments={"url": "https://bbc.co.uk/news"})
+        assert _has_network_intent(call) == (True, "https://bbc.co.uk/news")
+
+    def test_browser_navigate_missing_url_returns_empty_string(self) -> None:
+        call = ToolCall(id="tc", name="browser_navigate", arguments={})
+        assert _has_network_intent(call) == (True, "")
 
 
 class TestConcurrentDomainPrompting:

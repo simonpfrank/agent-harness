@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -13,6 +14,7 @@ from agent_harness.budget import Budget
 from agent_harness.hooks import Hooks
 from agent_harness.loops import registry as loop_registry
 from agent_harness.mcp_client import McpManager, McpServerSpec
+from agent_harness.network import _extract_domain
 from agent_harness.permissions import PermissionDecision, Permissions
 from agent_harness.providers import registry as provider_registry
 from agent_harness.runtime_callbacks import _NullTracer, make_callbacks
@@ -49,46 +51,160 @@ def _build_mcp_tool_callable(manager: McpManager, server: str, name: str) -> Cal
     return _call
 
 
-def _start_mcp_manager(
-    config: AgentConfig,
-    tool_registry: dict[str, Callable[..., str]],
-) -> tuple[McpManager | None, list[dict[str, Any]]]:
-    """Start any configured MCP servers and merge their tools into the registry.
+_BROWSER_NAV_TOOL_NAMES = {"browser_navigate", "browser_click"}
+_PAGE_URL_LINE_PATTERN = re.compile(r"^- Page URL: (\S+)", re.MULTILINE)
+
+
+def _extract_domain_from_snapshot(text: str) -> str | None:
+    """Extract the current page's domain from a Playwright MCP action result.
+
+    Playwright MCP's `browser_navigate`/`browser_click`/`browser_snapshot`
+    results all include a "- Page URL: <url>" line reporting where the
+    browser actually ended up — verified directly against a real running
+    `@playwright/mcp` server (2026-08-31), not assumed. Only this specific
+    line is matched, not any URL elsewhere in the result text (e.g. inside
+    the "Ran Playwright code" JS snippet, which can differ from the real
+    destination after a redirect).
+
+    Args:
+        text: Raw text result from a Playwright MCP tool call.
+
+    Returns:
+        The domain from the Page URL line, or `None` if the line isn't present.
+    """
+    match = _PAGE_URL_LINE_PATTERN.search(text)
+    return _extract_domain(match.group(1)) if match else None
+
+
+def _wrap_browser_nav_tool(manager: McpManager, server: str, name: str, hooks: Hooks) -> Callable[..., str]:
+    """Wrap a Playwright MCP navigation tool with a post-call domain gate.
+
+    `browser_click`'s arguments carry an opaque element reference, not a
+    URL, so the harness can't know the destination before the call runs —
+    a click could land on any domain. Checking the *result* instead closes
+    that gap: after the call completes, the resulting page's domain is run
+    through a synthetic `browser_navigate` `ToolCall` against the existing
+    hook chain, reusing `network_exfiltration_blocker`'s
+    allowlist/prompt/persistence exactly (not a second mechanism) — the
+    same check `browser_navigate`'s own `url` argument already goes
+    through today. Denied → the browser is navigated back and the agent
+    gets a message instead of the unapproved page's content.
+    `browser_navigate` is wrapped too, not just `browser_click` — its own
+    pre-call check only validates the URL the agent wrote, not where the
+    page actually ends up, so this also catches a redirect the pre-call
+    check alone can't see.
+
+    Args:
+        manager: The connected MCP manager to call through.
+        server: Name of the MCP server this tool belongs to — callers only
+            use this wrapper for the server actually named `playwright`.
+        name: The tool's name (`browser_navigate` or `browser_click`).
+        hooks: This run's hook chain, reused rather than duplicated.
+
+    Returns:
+        A tool-registry callable with the same call shape as a plain MCP passthrough.
+    """
+
+    def _call(**kwargs: Any) -> str:
+        result = manager.call_tool(server, name, kwargs)
+        domain = _extract_domain_from_snapshot(result)
+        if domain is None:
+            return result
+        synthetic = ToolCall(id="", name="browser_navigate", arguments={"url": f"https://{domain}"})
+        if hooks.run_before_tool(synthetic) is None:
+            manager.call_tool(server, "browser_navigate_back", {})
+            return f"Navigation to {domain} was not approved and has been reverted."
+        return result
+
+    _call.__name__ = name
+    return _call
+
+
+def _connect_mcp_servers(config: AgentConfig) -> tuple[McpManager | None, list[McpServerSpec]]:
+    """Start any configured MCP servers, without merging their tools yet.
+
+    Split from `_merge_mcp_tools` so a built-in tool (e.g.
+    `read_live_page_content`) can be constructed with a live reference to
+    the manager — via `ToolRuntimeContext.mcp_manager` — before
+    `build_tool_registry` runs, which happens between this call and the
+    merge step in `prepare_runtime`.
 
     Args:
         config: Loaded agent configuration. `mcp_servers` (if any) drives
-            which servers to connect to; `tools` is what this agent
+            which servers to connect to.
+
+    Returns:
+        The started manager (`None` if no servers are configured) and the
+        specs used to build it — the merge step needs the specs again for
+        each server's optional `tools` allow-list.
+    """
+    if not config.mcp_servers:
+        return None, []
+    specs = [McpServerSpec(**spec) for spec in config.mcp_servers]
+    manager = McpManager(specs)
+    manager.start()
+    return manager, specs
+
+
+def _merge_mcp_tools(
+    config: AgentConfig,
+    manager: McpManager | None,
+    specs: list[McpServerSpec],
+    tool_registry: dict[str, Callable[..., str]],
+    hooks: Hooks,
+) -> list[dict[str, Any]]:
+    """Merge an already-connected MCP manager's tools into the registry.
+
+    Args:
+        config: Loaded agent configuration. `tools` is what this agent
             actually exposes to the model — the collision check is against
             this, not the full tool registry, since an unexposed built-in
             (present in the registry but never offered to the model) isn't
             really competing with an MCP tool of the same name.
+        manager: The manager `_connect_mcp_servers` already started, or
+            `None` if this agent has no MCP servers configured.
+        specs: The same specs `_connect_mcp_servers` built the manager
+            from — used here for each server's optional `tools` allow-list.
         tool_registry: Registry to merge discovered MCP tools into, mutated
             in place. A tool whose name is already exposed via `config.tools`,
             or already claimed by an earlier MCP server in this same merge,
-            is skipped — not overwritten.
+            is skipped — not overwritten. A server that declares its own
+            `tools` allow-list only ever contributes tools on that list; a
+            server with no allow-list (the default) still exposes
+            everything it reports, unchanged from before this field existed.
+        hooks: This run's hook chain — threaded into `browser_navigate`/
+            `browser_click` from a server named `playwright` so they get
+            the post-call domain-revert wrapper instead of a plain
+            passthrough (see `_wrap_browser_nav_tool`). Every other MCP
+            tool, on any server, is unaffected.
 
     Returns:
-        The started manager (`None` if no servers are configured) and the
-        schema dicts for every tool that was actually merged in.
+        Schema dicts for every tool that was actually merged in.
     """
-    if not config.mcp_servers:
-        return None, []
-    manager = McpManager([McpServerSpec(**spec) for spec in config.mcp_servers])
-    manager.start()
+    if manager is None:
+        return []
+    allowlist_by_server = {spec.name: set(spec.tools) for spec in specs if spec.tools is not None}
     exposed_names = set(config.tools)
     claimed_by_mcp: set[str] = set()
     schemas: list[dict[str, Any]] = []
     for tool in manager.list_tools():
         name = tool["name"]
+        server = tool["server"]
+        allowlist = allowlist_by_server.get(server)
+        if allowlist is not None and name not in allowlist:
+            continue
         if name in exposed_names or name in claimed_by_mcp:
             logger.warning(
-                "MCP tool '%s' from server '%s' skipped — name collision", name, tool["server"],
+                "MCP tool '%s' from server '%s' skipped — name collision", name, server,
             )
             continue
-        tool_registry[name] = _build_mcp_tool_callable(manager, tool["server"], name)
+        if server == "playwright" and name in _BROWSER_NAV_TOOL_NAMES:
+            tool_registry[name] = _wrap_browser_nav_tool(manager, server, name, hooks)
+        else:
+            tool_registry[name] = _build_mcp_tool_callable(manager, server, name)
         claimed_by_mcp.add(name)
         schemas.append({"name": name, "description": tool["description"], "input_schema": tool["input_schema"]})
-    return manager, schemas
+    return schemas
 
 
 @dataclass
@@ -310,10 +426,12 @@ def prepare_runtime(
     tmp_dir = Path(config.agent_dir) / "tmp" / run_id
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
+    mcp_manager, mcp_specs = _connect_mcp_servers(config)
     tool_context = ToolRuntimeContext(
         memory_dir=f"{config.agent_dir}/memory",
         tool_timeout=config.tool_timeout,
         executor=config.executor,
+        mcp_manager=mcp_manager,
     )
     tool_registry = build_tool_registry(tool_context)
     discover_tools("tools", base_registry=tool_registry)
@@ -356,7 +474,7 @@ def prepare_runtime(
     )
     chat_fn = provider_registry[config.provider]
     loop_fn = loop_registry[config.loop]
-    mcp_manager, mcp_tool_schemas = _start_mcp_manager(config, tool_registry)
+    mcp_tool_schemas = _merge_mcp_tools(config, mcp_manager, mcp_specs, tool_registry, hooks)
     tool_schemas = [generate_schema(tool_registry[name]) for name in config.tools] + mcp_tool_schemas
     return PreparedRuntime(
         config=config,

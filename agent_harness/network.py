@@ -67,7 +67,7 @@ def _has_network_intent(tool_call: ToolCall) -> tuple[bool, str]:
         for pattern in _NETWORK_CODE_PATTERNS:
             if re.search(pattern, code):
                 return True, code
-    elif tool_call.name == "web_fetch":
+    elif tool_call.name in ("web_fetch", "browser_navigate"):
         return True, tool_call.arguments.get("url", "")
     elif tool_call.name == "web_search":
         return True, "https://api.tavily.com"

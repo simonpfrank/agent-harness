@@ -268,6 +268,10 @@ request to silently answer alongside).
   "what's happening today" prompt). Local time, via `datetime.now().astimezone()`.
 - `save_memory` / `recall_memory` / `list_memories` — see Memory below.
 - `run_agent` — delegate a task to a named sub-agent (see Multi-agent below).
+- `read_live_page_content` — reads the currently open browser page's main
+  content via a browser MCP server (see Browser automation below). Needs
+  `mcp_servers` configured with a server named `playwright`; raises
+  clearly otherwise.
 
 **Custom tools** (project-level `tools/`, auto-discovered):
 - `profile_data` — column profiling for CSV/Excel (pandas-based): types,
@@ -300,17 +304,25 @@ same pattern as `hooks`/`permissions`.
   server's stdio subprocess connection open for the whole run (spawned
   once, reused for every call, not respawned per tool call) behind a plain
   synchronous `list_tools`/`call_tool`/`close` surface.
-- **Tool merging** (`runtime.py::_start_mcp_manager`) — every discovered
-  MCP tool is auto-included in `tool_schemas`, not gated by `config.tools`
-  (the point of "auto-discovered" is the agent author doesn't hand-
-  enumerate them). **Collision policy**: a name already exposed via this
-  agent's own `config.tools` wins — MCP's version of that name is skipped.
-  A name *not* exposed by this agent (even if it exists as an unexposed
-  built-in elsewhere in the registry) is not blocked — MCP fills the gap.
-  Two MCP servers offering the same tool name: first one registered wins,
-  the rest are skipped. This means an agent author can "claim" any given
-  tool name for the harness's own implementation at any time just by
-  adding it to `config.tools` — no MCP config change needed.
+- **Tool merging** (`runtime.py::_connect_mcp_servers` + `_merge_mcp_tools`,
+  split 2026-08-31 so a built-in tool can be constructed with a live
+  reference to the manager — see "Browser automation" below) — every
+  discovered MCP tool is auto-included in `tool_schemas`, not gated by
+  `config.tools` (the point of "auto-discovered" is the agent author
+  doesn't hand-enumerate them) **unless the server itself declares an
+  optional `tools:` allow-list** in its `mcp_servers:` entry — added
+  2026-08-31 once a real need surfaced (see "Browser automation" below):
+  only tools on that list are merged in, everything else the server offers
+  is genuinely unreachable, not just unlisted. A server with no `tools:`
+  key keeps today's all-or-nothing behavior exactly. **Collision policy**:
+  a name already exposed via this agent's own `config.tools` wins — MCP's
+  version of that name is skipped. A name *not* exposed by this agent
+  (even if it exists as an unexposed built-in elsewhere in the registry)
+  is not blocked — MCP fills the gap. Two MCP servers offering the same
+  tool name: first one registered wins, the rest are skipped. This means
+  an agent author can "claim" any given tool name for the harness's own
+  implementation at any time just by adding it to `config.tools` — no MCP
+  config change needed.
 - **Fail-fast per dead server** — a normal tool-level error (bad args,
   `fastmcp.exceptions.ToolError`) flows back to the model exactly like any
   other tool error, unchanged. A transport-level failure (server
@@ -325,6 +337,100 @@ same pattern as `hooks`/`permissions`.
   No HTTP/SSE remote servers, no MCP server mode, no resources/prompts/
   sampling — see `docs/roadmap.md`'s "Scoped out of MCP client support"
   backlog for what was deliberately cut and why.
+
+## Browser automation
+
+Built on Microsoft's official `@playwright/mcp` server via the MCP client
+support above — no native Playwright integration, no new browser-specific
+subsystem. Config-only for the automation itself (`agents/browser-assistant/`
+is the reference example); two small, targeted harness changes closed real
+gaps found while designing it, detailed below. Full PRD-then-plan cycle
+first — accessibility-tree approach validated against real 2026 research on
+LLM browser agents, the security design grounded in real, operational
+indirect-prompt-injection research, not assumed.
+
+- **Accessibility-tree, not screenshots, is the default mode.**
+  `browser_snapshot` returns interactive elements only (role, name, a
+  stable `ref` id per element) — no raw page text, no images. This is what
+  makes "navigate without reading the whole page" actually work, and
+  matches the field's 2026 consensus (Playwright MCP, Stagehand, and
+  others all converged on DOM/accessibility-tree-first, screenshots as a
+  secondary fallback, once the token-cost gap became clear — a
+  screenshot runs 20–50x the tokens of the equivalent structured
+  snapshot). `browser_take_screenshot` is available but not part of the
+  default path.
+- **`read_live_page_content`** (`tools.py`) — a new built-in, separate from
+  navigating. Reuses `web_fetch`'s trafilatura extraction (refactored into
+  a shared `_extract_readable_content` helper) against the *live,
+  JS-rendered* DOM via `browser_evaluate`, closing the real gap that
+  `web_fetch`'s plain `httpx.get` can't see past a single-page app's
+  pre-hydration HTML shell. Hardcodes the MCP server name `playwright`
+  deliberately — no new config key for "which server is the browser,"
+  matching this project's small-config-first style.
+- **Reaching the live browser session from a built-in tool required a
+  construction-order fix**, not just a new tool: `prepare_runtime` used to
+  build `tool_registry` *before* starting any MCP servers, so a built-in
+  closure had no manager to reference. `_connect_mcp_servers` now runs
+  first, and a new `ToolRuntimeContext.mcp_manager` field threads the live
+  manager through to `read_live_page_content` before the MCP tool-merge
+  step runs later in the same function.
+- **Off-domain navigation via a link click is gated, not just explicit
+  `browser_navigate` calls.** `browser_click`'s arguments carry an opaque
+  element reference, not a URL, so the harness can't know a click's
+  destination before it runs — a real gap `_has_network_intent`'s
+  pre-call check (below) can't close on its own. Fix: `browser_click` and
+  `browser_navigate`, when served by the `playwright` server specifically,
+  get a wrapper (`runtime.py::_wrap_browser_nav_tool`) instead of the
+  plain MCP passthrough — after the call completes, the resulting page's
+  domain is parsed from Playwright MCP's own `"- Page URL: <url>"` result
+  line (verified against a real running server, not assumed) and run
+  through a synthetic `browser_navigate` `ToolCall` against the *same*
+  hook chain, reusing `network_exfiltration_blocker`'s
+  allowlist/prompt/persistence exactly — not a second mechanism. Denied →
+  `browser_navigate_back` is called for real and the agent gets a message
+  instead of the unapproved page's content. `browser_navigate` is wrapped
+  too, not just `browser_click` — its own pre-call check only validates
+  the URL the agent wrote, not where the page actually ends up, so this
+  also catches a redirect. Verified live end-to-end against a real
+  `@playwright/mcp` server (2026-08-31): a denied cross-domain click
+  genuinely reverted the browser and withheld the page's content, not
+  just in a mocked test.
+- **`_has_network_intent`** (`network.py`) gained a `browser_navigate`
+  branch, reusing `web_fetch`'s exact pattern — this is what routes an
+  explicit `browser_navigate` call through the existing domain-approval
+  flow before it ever reaches the browser.
+- **Hidden-content stripping** (`tools.py::_strip_hidden_content`) — real
+  2026 indirect-prompt-injection payloads rely on text a human can't see
+  but a scraper/agent will read; the existing `injection_scanner`'s three
+  keyword patterns ("ignore previous", etc.) wouldn't catch any of them.
+  Structural pattern-matching instead, applied inside
+  `_extract_readable_content` (so it benefits `web_fetch` too, not just
+  browser-sourced content): CSS-hidden elements (`display:none`,
+  `visibility:hidden`, `opacity:0`, the `hidden` attribute, via a real
+  `lxml` parse, not regex-mangled HTML) and zero-width Unicode characters
+  are removed before trafilatura ever sees the text. Not a general
+  classifier — the hiding technique itself has to exist for the attack to
+  work, which is what makes it a tractable, targeted signal rather than a
+  guess at intent. `injection_scanner` remains a secondary, weak,
+  flag-not-block layer — the real defense here is containment (domain
+  gating above), not detection.
+- **Profile posture**: ephemeral/incognito by default (`--isolated`
+  launch flag), a real/persistent profile only as an explicit per-agent
+  `--user-data-dir` opt-in, never silently inherited — a config choice on
+  the MCP server's own launch args, no harness code involved.
+- **v1 scope, deliberately narrow**: read/navigate only.
+  `browser_navigate`, `browser_click`, `browser_snapshot`,
+  `browser_wait_for`, `browser_tabs`, `browser_close` are the only
+  Playwright MCP tools exposed in the reference agent's per-server
+  `tools:` allow-list (see MCP client support above). Form-filling
+  (`browser_type`/`browser_fill_form`/`browser_file_upload`/
+  `browser_press_key`) and arbitrary JS execution
+  (`browser_run_code_unsafe`; `browser_evaluate` stays internal-only
+  inside `read_live_page_content`) are not exposed — the pattern to
+  follow when they are: they must join `permissions.always_ask`
+  regardless of domain trust, not rely on the domain gate alone.
+- Full design discussion, including the security research this was
+  grounded in and the options considered: `/Users/simonfrank/.claude/plans/as-i-want-a-nifty-rabbit.md`.
 
 ## Multimodal / file handling (`attachments.py`)
 
@@ -570,7 +676,7 @@ framework, same relationship as `scripts/` has to it.
 
 ## Example agents (`agents/`)
 
-Eleven example agents demonstrating different loop patterns: `hello`
+Twelve example agents demonstrating different loop patterns: `hello`
 (react, general assistant — also configured with an `mcp_servers:` entry
 pointing at the reference `@modelcontextprotocol/server-filesystem` via
 `npx`, so it's the live MCP-support demo alongside being the general
@@ -579,7 +685,9 @@ pandas tools), `analyst` (reflection), `reviewer` (eval_optimize),
 `persistent-coder` (ralph), `orchestrator` (react + `run_agent`
 delegation), `column-matcher` / `column-matcher-reflective` (the
 pension-data column-matching task, react vs. reflection variants),
-`local-coder`.
+`local-coder`, `browser-assistant` (react + `read_live_page_content` +
+`@playwright/mcp` — the browser-automation reference agent, see "Browser
+automation" above).
 
 - **`agent_budgets`** (react + `read_file`/`content_search`/
   `list_provider_models`/`web_fetch`/`web_search`/`edit_file`) —
@@ -610,8 +718,7 @@ fan-out — deliberately deferred to a future "async phase" rather than
 scheduled as a one-off, alongside the API/async-boundary item, since
 there's still no concrete driving use case in this repo (`orchestrator`
 calls `run_agent` serially). No structured HTTP/API request tool (distinct
-from `web_fetch`, which reads pages, not JSON APIs). No browser
-automation. No messaging/notification tool. No prompt caching (deliberately
+from `web_fetch`, which reads pages, not JSON APIs). No messaging/notification tool. No prompt caching (deliberately
 delayed until agents exist with a big enough tool/instruction footprint and
 enough turns to clear the provider's cache-block minimum and recoup the
 write-cache premium). No adaptive/dynamic re-planning — `plan_execute`'s

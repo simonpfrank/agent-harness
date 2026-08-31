@@ -1,0 +1,41 @@
+name: browser-assistant
+provider: anthropic
+model: claude-haiku-4-5-20251001
+tools: [read_live_page_content, get_current_date, get_current_time]
+max_turns: 20
+max_cost: 0.50
+mcp_servers:
+  # Must be named exactly "playwright" — read_live_page_content and the
+  # browser_click/browser_navigate domain-revert wrapper both hard-code
+  # this name (see agent_harness/tools.py and agent_harness/runtime.py).
+  - name: playwright
+    command: npx
+    args: ["@playwright/mcp@latest", "--isolated"]
+    # --isolated = in-memory, throwaway browser context by default (no
+    # disk persistence, no inheriting your real cookies/logins). To opt
+    # into a real, persistent, logged-in session instead, replace
+    # "--isolated" with:
+    #   ["--user-data-dir", "/absolute/path/to/a/DEDICATED/profile/dir"]
+    # That path must be a profile made for this agent specifically — not
+    # your actual daily Chrome/Edge profile directory. Most browsers lock
+    # their live profile while running anyway, and pointing Playwright at
+    # your everyday browser would be a much larger blast-radius mistake
+    # than the deliberate opt-in this is meant to be.
+    #
+    # Headed (a visible browser window) is @playwright/mcp's own default —
+    # no flag needed. Add "--headless" to the args above to run without a
+    # visible window instead.
+    tools: [browser_navigate, browser_click, browser_snapshot, browser_wait_for, browser_tabs, browser_close]
+    # Deliberately not exposed here (v1 scope — see tools.md): browser_type,
+    # browser_fill_form, browser_file_upload, browser_press_key,
+    # browser_evaluate (used internally only, by read_live_page_content),
+    # browser_run_code_unsafe, and every network/storage/cookie/devtools tool
+    # @playwright/mcp also offers. If any of those are ever added to this
+    # list, they must also be added to permissions.always_ask below,
+    # regardless of domain trust.
+permissions:
+  always_ask: []
+hooks:
+  before_tool: [dangerous_command_blocker, path_traversal_detector, network_exfiltration_blocker]
+  after_tool: [injection_scanner, secrets_leakage_scanner]
+  allowed_domains: []

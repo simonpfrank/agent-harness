@@ -170,6 +170,66 @@ class TestMcpWiring:
         runtime.tool_registry["shared_tool"](x=1)
         mock_manager.call_tool.assert_called_once_with("server_a", "shared_tool", {"x": 1})
 
+    def test_server_declared_tools_allowlist_filters_out_other_tools(self) -> None:
+        config = load_config(WITH_MCP_SERVERS)
+        config.mcp_servers[0]["tools"] = ["allowed_tool"]
+        with patch("agent_harness.runtime.McpManager") as mock_manager_cls:
+            mock_manager = mock_manager_cls.return_value
+            allowed = {"server": "filesystem", "name": "allowed_tool", "description": "ok", "input_schema": {}}
+            blocked = {"server": "filesystem", "name": "blocked_tool", "description": "no", "input_schema": {}}
+            mock_manager.list_tools.return_value = [allowed, blocked]
+            runtime = prepare_runtime(
+                config,
+                permission_prompt_fn=lambda _tc: PermissionDecision.deny(),
+                show_output=False,
+                trace_enabled=False,
+            )
+        assert "allowed_tool" in runtime.tool_registry
+        assert "blocked_tool" not in runtime.tool_registry
+        schema_names = [s["name"] for s in runtime.tool_schemas]
+        assert "allowed_tool" in schema_names
+        assert "blocked_tool" not in schema_names
+
+    def test_no_server_declared_tools_key_exposes_everything_unchanged(self) -> None:
+        """Regression guard: WITH_MCP_SERVERS declares no `tools:` allow-list —
+        today's all-or-nothing behavior must be unaffected."""
+        config = load_config(WITH_MCP_SERVERS)
+        with patch("agent_harness.runtime.McpManager") as mock_manager_cls:
+            mock_manager = mock_manager_cls.return_value
+            first = {"server": "filesystem", "name": "tool_a", "description": "a", "input_schema": {}}
+            second = {"server": "filesystem", "name": "tool_b", "description": "b", "input_schema": {}}
+            mock_manager.list_tools.return_value = [first, second]
+            runtime = prepare_runtime(
+                config,
+                permission_prompt_fn=lambda _tc: PermissionDecision.deny(),
+                show_output=False,
+                trace_enabled=False,
+            )
+        assert "tool_a" in runtime.tool_registry
+        assert "tool_b" in runtime.tool_registry
+
+    def test_builtin_tool_can_reach_the_live_mcp_manager(self) -> None:
+        """read_live_page_content (a built-in) needs a reference to the same
+        McpManager instance MCP tools are merged through — proves the
+        connect-before-build_tool_registry reorder actually threads it in,
+        not just that MCP passthrough tools work (already covered above)."""
+        config = load_config(WITH_MCP_SERVERS)
+        config.tools = [*config.tools, "read_live_page_content"]
+        with patch("agent_harness.runtime.McpManager") as mock_manager_cls:
+            mock_manager = mock_manager_cls.return_value
+            mock_manager.list_tools.return_value = []
+            mock_manager.call_tool.return_value = "<html><body>hi</body></html>"
+            runtime = prepare_runtime(
+                config,
+                permission_prompt_fn=lambda _tc: PermissionDecision.deny(),
+                show_output=False,
+                trace_enabled=False,
+            )
+            runtime.tool_registry["read_live_page_content"]()
+        mock_manager.call_tool.assert_called_once_with(
+            "playwright", "browser_evaluate", {"function": "() => document.documentElement.outerHTML"},
+        )
+
     def test_finalize_closes_mcp_manager_when_present(self) -> None:
         config = load_config(WITH_MCP_SERVERS)
         with patch("agent_harness.runtime.McpManager") as mock_manager_cls:
@@ -193,6 +253,135 @@ class TestMcpWiring:
             trace_enabled=False,
         )
         runtime.finalize()  # should not raise
+
+
+class TestBrowserNavDomainGuard:
+    """browser_click/browser_navigate on a server named 'playwright' get a
+    post-call domain gate — browser_click's own arguments carry an opaque
+    element ref, not a URL, so the harness can't know the destination
+    before the call runs; this checks the *result* instead, reusing the
+    existing network_exfiltration_blocker hook chain rather than a new
+    mechanism. Real Playwright MCP result format ("- Page URL: <url>")
+    verified against a live server, not assumed."""
+
+    _NAV_RESULT = "### Page\n- Page URL: https://newdomain.com/page\n- Page Title: X\n### Snapshot\n"
+
+    def _config_with_playwright_server(self, tmp_path: Path, allowed_domains: list[str] | None = None) -> AgentConfig:
+        """Fresh AgentConfig per test — network_exfiltration_blocker persists
+        approved domains to `{agent_dir}/.allowed_domains.yaml` on disk, so
+        reusing a shared fixture directory across tests in this class would
+        let one test's approval leak into another's "should prompt" case."""
+        agent_dir = tmp_path / "agent"
+        agent_dir.mkdir()
+        return AgentConfig(
+            name="test",
+            provider="anthropic",
+            model="claude-haiku-4-5-20251001",
+            agent_dir=str(agent_dir),
+            instructions="test",
+            tools=[],
+            max_turns=5,
+            hooks={"allowed_domains": allowed_domains or []},
+            mcp_servers=[{"name": "playwright", "command": "npx", "args": ["@playwright/mcp@latest"]}],
+        )
+
+    def test_new_domain_approved_passes_result_through(self, tmp_path: Path) -> None:
+        config = self._config_with_playwright_server(tmp_path)
+        with patch("agent_harness.runtime.McpManager") as mock_manager_cls:
+            mock_manager = mock_manager_cls.return_value
+            tool = {"server": "playwright", "name": "browser_click", "description": "d", "input_schema": {}}
+            mock_manager.list_tools.return_value = [tool]
+            mock_manager.call_tool.return_value = self._NAV_RESULT
+            runtime = prepare_runtime(
+                config,
+                permission_prompt_fn=lambda _tc: PermissionDecision.deny(),
+                domain_prompt_fn=lambda _domain: True,
+                show_output=False,
+                trace_enabled=False,
+            )
+            result = runtime.tool_registry["browser_click"](target="e1")
+        assert result == self._NAV_RESULT
+        assert not any(c.args[1] == "browser_navigate_back" for c in mock_manager.call_tool.call_args_list)
+
+    def test_new_domain_denied_reverts_and_withholds_content(self, tmp_path: Path) -> None:
+        config = self._config_with_playwright_server(tmp_path)
+        with patch("agent_harness.runtime.McpManager") as mock_manager_cls:
+            mock_manager = mock_manager_cls.return_value
+            tool = {"server": "playwright", "name": "browser_click", "description": "d", "input_schema": {}}
+            mock_manager.list_tools.return_value = [tool]
+            mock_manager.call_tool.return_value = self._NAV_RESULT
+            runtime = prepare_runtime(
+                config,
+                permission_prompt_fn=lambda _tc: PermissionDecision.deny(),
+                domain_prompt_fn=lambda _domain: False,
+                show_output=False,
+                trace_enabled=False,
+            )
+            result = runtime.tool_registry["browser_click"](target="e1")
+        assert "newdomain.com" in result
+        assert "not approved" in result
+        mock_manager.call_tool.assert_any_call("playwright", "browser_navigate_back", {})
+
+    def test_already_allowed_domain_does_not_prompt(self, tmp_path: Path) -> None:
+        prompted: list[str] = []
+        config = self._config_with_playwright_server(tmp_path, allowed_domains=["newdomain.com"])
+        with patch("agent_harness.runtime.McpManager") as mock_manager_cls:
+            mock_manager = mock_manager_cls.return_value
+            tool = {"server": "playwright", "name": "browser_click", "description": "d", "input_schema": {}}
+            mock_manager.list_tools.return_value = [tool]
+            mock_manager.call_tool.return_value = self._NAV_RESULT
+            runtime = prepare_runtime(
+                config,
+                permission_prompt_fn=lambda _tc: PermissionDecision.deny(),
+                domain_prompt_fn=lambda domain: prompted.append(domain) or True,
+                show_output=False,
+                trace_enabled=False,
+            )
+            result = runtime.tool_registry["browser_click"](target="e1")
+        assert prompted == []
+        assert result == self._NAV_RESULT
+
+    def test_browser_navigate_also_wrapped_catches_redirect(self, tmp_path: Path) -> None:
+        """browser_navigate's pre-call check only validates the URL the agent
+        wrote — this proves a redirect to a different domain is still caught
+        via the same post-call wrapper, not just browser_click."""
+        config = self._config_with_playwright_server(tmp_path)
+        with patch("agent_harness.runtime.McpManager") as mock_manager_cls:
+            mock_manager = mock_manager_cls.return_value
+            tool = {"server": "playwright", "name": "browser_navigate", "description": "d", "input_schema": {}}
+            mock_manager.list_tools.return_value = [tool]
+            mock_manager.call_tool.return_value = self._NAV_RESULT
+            runtime = prepare_runtime(
+                config,
+                permission_prompt_fn=lambda _tc: PermissionDecision.deny(),
+                domain_prompt_fn=lambda _domain: False,
+                show_output=False,
+                trace_enabled=False,
+            )
+            result = runtime.tool_registry["browser_navigate"](url="https://short.ly/x")
+        assert "not approved" in result
+        mock_manager.call_tool.assert_any_call("playwright", "browser_navigate_back", {})
+
+    def test_non_playwright_server_browser_named_tool_not_wrapped(self) -> None:
+        """The wrapper is keyed on the server being named 'playwright', not
+        just the tool name — a different server's same-named tool stays a
+        plain passthrough."""
+        config = load_config(WITH_MCP_SERVERS)  # server named "filesystem"
+        with patch("agent_harness.runtime.McpManager") as mock_manager_cls:
+            mock_manager = mock_manager_cls.return_value
+            tool = {"server": "filesystem", "name": "browser_click", "description": "d", "input_schema": {}}
+            mock_manager.list_tools.return_value = [tool]
+            mock_manager.call_tool.return_value = self._NAV_RESULT
+            runtime = prepare_runtime(
+                config,
+                permission_prompt_fn=lambda _tc: PermissionDecision.deny(),
+                show_output=False,
+                trace_enabled=False,
+            )
+            result = runtime.tool_registry["browser_click"](target="e1")
+        # No domain approval attempted at all — plain passthrough, unapproved domain leaks through.
+        assert result == self._NAV_RESULT
+        mock_manager.call_tool.assert_called_once_with("filesystem", "browser_click", {"target": "e1"})
 
 
 def _tmp_agent_config(agent_dir: Path, tools: list[str] | None = None) -> AgentConfig:
